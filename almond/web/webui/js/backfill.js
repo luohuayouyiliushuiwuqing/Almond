@@ -2,7 +2,7 @@
    是**强制补抓**，连抓过失败的一起重跑。两者都不改服务端，只是入队集合不同。 */
 import { updateCard } from "./cards.js";
 import { openDetail } from "./detail.js";
-import { postFetch } from "./fetch.js";
+import { fetchJob, postFetch } from "./fetch.js";
 import { detectProxy } from "./proxy-panel.js";
 import { loadDomainConfig, loadRecords, upsert } from "./records.js";
 import { $, adoptProxy, hostOf, rootDomain, setStatus, state } from "./state.js";
@@ -292,8 +292,10 @@ function schedulePoll() {
 
 function pollPending() {
   const gen = backfillState.gen;
-  fetch("/api/records/pending")
-    .then((r) => r.json())
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);   // 8 秒超时：后端卡住时不会永久挂起
+  fetch("/api/records/pending", { signal: ctrl.signal })
+    .then((r) => { clearTimeout(timer); return r.json(); })
     .then((data) => {
       if (gen !== backfillState.gen) return;   // 已切存储：本响应作废，不入队也不续轮询
       const urls = (data && data.urls) || [];
@@ -306,7 +308,7 @@ function pollPending() {
       });
     })
     .then(() => { if (gen === backfillState.gen) schedulePoll(); })
-    .catch(() => { if (gen === backfillState.gen) schedulePoll(); }); // 瞬时故障下轮再试
+    .catch(() => { clearTimeout(timer); if (gen === backfillState.gen) schedulePoll(); }); // 瞬时故障/超时下轮再试
 }
 
 function startPolling() {
@@ -414,8 +416,7 @@ async function runBackfill() {
       paintButton();
       backfillState.inflight.add(url);   // 在途：挡住下一次轮询的重复入队
       try {
-        const data = await postFetch("/api/fetch", { url, proxy: state.globalProxy });
-        if (data && data.proxy_swapped) adoptProxy(data.proxy_swapped);   // 坏端口被服务端顶替，后续记录跟着走新端口
+        const data = await fetchJob("/api/fetch", { url, proxy: state.globalProxy });
         if (gen !== backfillState.gen) {
           // 切存储后返回的旧轮结果：不计数、不 upsert、不更新卡片
         } else if (data.stale) {

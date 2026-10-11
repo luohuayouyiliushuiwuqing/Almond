@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from almond.core import fetch_hints, fetchpool, records
 from almond.core.log import logger
 
-_TEST_WORKERS = 5      # 与 fetchpool 池、前端补抓并发一致
+_TEST_WORKERS = 8      # 与 fetchpool 池、前端补抓并发一致
 _TEST_REASON = "直连/代理/JS 多路尝试均未取得数据"
 
 

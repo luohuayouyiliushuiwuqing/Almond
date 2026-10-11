@@ -137,6 +137,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/img":
             self.handle_img(qs)
             return
+        if path == "/api/fetch/status":
+            self._handle_fetch_status(qs)
+            return
         file_path = resolve_static(path)
         if file_path is None:
             self.send_error(404)
@@ -173,6 +176,56 @@ class Handler(BaseHTTPRequestHandler):
         status, body, ctype = imgproxy.handle_img(src, proxy)
         self._send_img(body, ctype, status)
 
+    def _handle_fetch_status(self, qs: dict) -> None:
+        """异步抓取结果查询（供前端轮询）。
+
+        200：任务完成，返回完整结果（与原 /api/fetch 响应格式一致）；
+        204：任务仍在跑，前端稍后再查；
+        404：任务不存在（job_id 无效或已被切库清掉）。
+        """
+        raw_id = (qs.get("job_id") or [""])[0]
+        if not raw_id or not raw_id.isdigit():
+            self._send_json({"ok": False, "error": "缺少或无效的 job_id"}, 400)
+            return
+        job_id = int(raw_id)
+        info = fetchpool.peek(job_id)
+        if not info["done"]:
+            # 还在跑：204 无 body（前端据此继续轮询，不消耗多余带宽）
+            self.send_response(204)
+            self.end_headers()
+            return
+        got = info["result"]         # (meta, effects) 或 None（任务被硬停）
+        start_epoch = info["epoch"]  # 提交时的存储纪元（fetchpool 代记）
+        if storage_epoch() != start_epoch:
+            self._send_json({
+                "ok": True, "stale": True, "success": False,
+                "error": "存储已切换，抓取结果已丢弃",
+            })
+            return
+        if got is None:
+            self._send_json({
+                "ok": True, "stale": True, "success": False,
+                "error": "存储已切换，抓取子进程已硬停，结果作废",
+            })
+            return
+        meta, effects = got
+        fetch_hints.apply_effects(effects, epoch=start_epoch)
+        if meta is None:
+            self._send_json({"ok": False, "error": "抓取子进程异常，未取得结果"})
+            return
+        merged = upsert_record_if_epoch(meta, start_epoch)
+        if merged is None:
+            self._send_json({
+                "ok": True, "stale": True, "success": False,
+                "error": "存储已切换，本次抓取结果已丢弃",
+            })
+            return
+        fetch_hints.apply_effects(effects, epoch=start_epoch)
+        payload = {"ok": True, "record": merged, "success": bool(meta.get("success"))}
+        if start_epoch and storage_epoch() != start_epoch:
+            payload["stale"] = True
+        self._send_json(payload)
+
     # ---------- 业务 ----------
 
     def _do_POST(self) -> None:
@@ -186,11 +239,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "网址必须以 http:// 或 https:// 开头"}, 400)
                 return
 
-            # ① 请求级纪元（先于一切网络动作捕获）：客户端在请求体带上它开抓时的
-            #    存储纪元。切库**之后**才到达 / 才被线程调度执行的旧轮请求——
-            #    abort() 只断浏览器连接，服务端可能早已收到完整请求体——在这里
-            #    直接作废、一个包都不发。没有这层时，这类请求的 start_epoch 读到的
-            #    已经是新纪元，会把旧目录的 URL 抓完写进新库（污染 B 库）。
+            # ① 请求级纪元校验（与同步版一致）：旧纪元的请求直接丢弃
             start_epoch = storage_epoch()
             req_epoch = data.get("epoch")
             if isinstance(req_epoch, int) and req_epoch != start_epoch:
@@ -205,58 +254,20 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             proxy = effective_proxy(url, global_proxy)
-            # 域名级抓取规则：详情选择器 + 封面开关。
-            # 代理不用这里的 need_proxy——effective_proxy 已经按
-            # 「URL 模式规则 > 域名规则 > 全局」算好了，再覆盖会打乱优先级
             rules = get_domain_fetch_config(url)
-            # 代理健康顶替：配置的端口转发不通 → 本机区间找可用端口换上，
-            # 并通过 proxy_swapped 回传给前端（前端跟上地址，不再反复撞坏端口）。
-            # 顶替动作的日志由 ensure_working_proxy 统一打
             if proxy:
                 proxy = fetch_hints.ensure_working_proxy(proxy)
-            # 抓取本体跑在**子进程**（fetchpool）：切库时 cancel_all 硬杀进程树
-            # ——正在跑的引擎调用当场中断，不用等它超时；Web 进程也不再有抓取的
-            # GIL/锁争用。子进程带回的缓存写入（效应）经纪元校验后才落地。
-            job = fetchpool.submit(url=url, proxy=proxy,
-                                   selector=rules["detail_selector"] or None,
-                                   cover=rules["cover"])
-            try:
-                got = fetchpool.wait(job)
-            except TimeoutError:
-                self._send_json({"ok": False, "error": "抓取子进程无响应（已放弃本次抓取）"}, 500)
-                return
-            if got is None:
-                # 子进程被硬停（切库）→ 本次抓取作废
-                self._send_json({
-                    "ok": True, "stale": True, "success": False,
-                    "error": "存储已切换，抓取子进程已硬停，结果作废",
-                })
-                return
-            meta, effects = got
-            if storage_epoch() != start_epoch:
-                self._send_json({
-                    "ok": True, "stale": True, "success": False,
-                    "error": "存储已切换，本次抓取结果已丢弃",
-                })
-                return
-            fetch_hints.apply_effects(effects, epoch=start_epoch)   # 学习落地（纪元已复核）
-            if meta is None:
-                # 子进程内部异常（不是切库）：如实报失败，不做写入
-                self._send_json({"ok": False, "error": "抓取子进程异常，未取得结果"})
-                return
-            # 原子写入：比对纪元 + 写库一体执行（与切库互斥），堵住
-            # 「守卫比对通过 → 切库发生 → 写进新库」的最后一段窗口
-            merged = upsert_record_if_epoch(meta, start_epoch)
-            if merged is None:
-                self._send_json({
-                    "ok": True, "stale": True, "success": False,
-                    "error": "存储已切换，本次抓取结果已丢弃",
-                })
-                return
-            fetch_hints.apply_effects(effects, epoch=start_epoch)
-            # success 说的是**本次抓取**：record.success 是合并后的值，失败时按合并规则
-            # 保留快照/旧内容（可能仍是 1），拿它计数会把失败全算成成功
-            payload = {"ok": True, "record": merged, "success": bool(meta.get("success"))}
+            # ② 异步提交：立即返回 job_id，前端通过 /api/fetch/status 轮询结果。
+            #    旧版同步版：fetchpool.wait(job) 阻塞请求线程数秒~数分钟，
+            #    5 并发 × 长等待 → 浏览器 6 连接全部占满 → 前端所有 GET 排不上队。
+            job_id = fetchpool.submit(
+                epoch=start_epoch,
+                url=url, proxy=proxy,
+                selector=rules["detail_selector"] or None,
+                cover=rules["cover"],
+            )
+            payload = {"ok": True, "job_id": job_id}
+            # 代理端口已被顶替时，立即告知前端跟上新地址（不用等轮询结果）
             if proxy and proxy != global_proxy:
                 payload["proxy_swapped"] = proxy
             self._send_json(payload)

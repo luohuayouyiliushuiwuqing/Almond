@@ -735,6 +735,13 @@ main {
   font-weight: 400; color: var(--faint);
   font-family: ui-monospace, Consolas, monospace;
 }
+.test-refresh-btn {
+  padding: 1px 8px; font-size: 11px; border-radius: 4px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  cursor: pointer; margin-left: 4px;
+}
+.test-refresh-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.test-refresh-btn:disabled { opacity: .4; cursor: default; }
 /* 左扇区：实测列表独立滚动（域名可能上百个） */
 .test-list {
   max-height: min(460px, 52vh);

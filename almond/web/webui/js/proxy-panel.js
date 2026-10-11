@@ -1,6 +1,8 @@
 /* 代理映射面板 + 域名管理弹窗（它唯一的开启方）。 */
 import { render } from "./board.js";
+import { backfillState, startBackfill } from "./backfill.js";
 import { goToDomain } from "./domain-page.js";
+import { abortAllFetches } from "./fetch.js";
 import { loadDomainConfig, loadProxyDomains, loadRecords } from "./records.js";
 import { $, el, setStatus, state } from "./state.js";
 
@@ -241,6 +243,67 @@ async function renderProxyPanel() {
 
 /* 改一个域名的用户规则（need_proxy：true/false/null=取消指定跟随全局）。
    只动左栏数据；右栏实测结论来自 fetch_hints，与本接口无关 */
+
+/* ---------- 刷新未测试/失败的域名方案确认 ---------- */
+
+export async function refreshDomainTests() {
+  const btn = $("testRefreshBtn");
+  if (!btn) return;
+  // 收集需要刷新的域名：未测试 / 无方案 / 方案失效
+  const data = await (await fetch("/api/domains")).json();
+  const todo = (data.domains || [])
+    .filter((d) => {
+      const t = d.tested;
+      if (!t) return true;                                    // 未测试
+      if (t.confirm && t.confirm.ok === false) return true;   // 无方案
+      if (t.confirm && t.plan !== true) return true;          // 方案失效
+      return false;
+    })
+    .map((d) => d.name);
+  if (!todo.length) { setStatus("所有域名均已确认且有可用方案，无需刷新"); return; }
+
+  btn.disabled = true;
+  btn.textContent = "确认中…";
+
+  /* ── 暂停补抓，让出子进程池给确认阶段 ──
+     确认和补抓共用同一个 5 进程子进程池（fetchpool），同时跑会互相挤占：
+     补抓占满 5 个 → 确认排队等；确认占满 → 补抓排队等。
+     策略：暂停补抓 + 中止在途连接 → 子进程池全给确认 → 跑完再恢复补抓。 */
+  const wasPaused = backfillState.paused;
+  backfillState.paused = true;   // 仅内存态：不写 localStorage，恢复时按原值还原
+  abortAllFetches();              // 中止在途的 /api/fetch 轮询连接，释放浏览器连接槽
+
+  setStatus(`正在重新确认 ${todo.length} 个域名的抓取方案…`, "busy");
+  try {
+    const resp = await fetch("/api/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domains: todo, proxy: state.globalProxy, epoch: state.storageEpoch }),
+    });
+    const result = await resp.json();
+    if (result.stale) { setStatus("存储已切换，刷新作废"); return; }
+    // 刷新面板
+    await loadDomainConfig();
+    renderProxyPanel();
+    const parts = [];
+    if ((result.confirmed || []).length) parts.push(`新确认 ${result.confirmed.length} 个`);
+    if ((result.ready || []).length) parts.push(`已有方案 ${result.ready.length} 个`);
+    if ((result.failed || []).length) parts.push(`无方案 ${result.failed.length} 个`);
+    if ((result.transient || []).length) parts.push(`临时失败 ${result.transient.length} 个`);
+    setStatus(parts.length ? `刷新完成：${parts.join("，")}` : "刷新完成");
+  } catch (e) {
+    setStatus("刷新失败：" + e.message, "err");
+  } finally {
+    /* ── 恢复补抓 ── */
+    backfillState.paused = wasPaused;
+    btn.disabled = false;
+    btn.textContent = "刷新";
+    // 重启补抓：若之前没暂停，重新扫一遍待抓记录并启动轮询；
+    // 若之前已暂停，startBackfill 读 localStorage 的暂停位会正确保持暂停
+    startBackfill();
+  }
+}
+
 async function patchNeedProxy(name, need_proxy) {
   try {
     const resp = await fetch("/api/domain", {

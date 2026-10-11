@@ -36,6 +36,73 @@ export async function postFetch(path, body) {
   }
 }
 
+/* ---------- 异步抓取轮询（避免长连接占满浏览器 6 连接上限） ----------
+
+   旧版同步模式：POST /api/fetch → 后端等子进程完成 → 数秒~数分钟后返回结果。
+   5 并发 × 长等待 → 浏览器 HTTP/1.1 的 6 连接全部占满 → 前端的
+   GET /api/storage-dir、GET /api/proxy-detect 等全部排不上队 → 界面卡死。
+
+   新版异步模式：POST /api/fetch → 后端立即返回 job_id →
+   前端轮询 GET /api/fetch/status?job_id=N（500ms 间隔，首轮延迟 1s 给子进程启动时间）
+   → 204 继续等 / 200 拿结果。连接占用从「分钟级阻塞」降到「秒级瞬间」。 */
+
+const POLL_MS = 500;       // 轮询间隔（500ms，5 并发 → 每次最多 5 个 204 短请求）
+const POLL_START = 1000;   // 首轮延迟（给子进程 1s 启动时间，避免无谓的立即查询）
+const POLL_TIMEOUT = 300000; // 5 分钟超时（正常三级降级远快于此）
+
+/**
+ * 异步提交并轮询结果（供 backfill worker 和单条抓取共用）。
+ * 返回与旧版 postFetch("/api/fetch", body) 完全一致的数据结构；
+ * 出错/超时时返回 { ok: false, error: "..." }。
+ * signal 可选：传入 AbortController.signal，切存储时可中止轮询。
+ */
+export async function fetchJob(path, body, signal) {
+  // ① 提交：后端立即返回 job_id
+  const ctrl = signal ? null : new AbortController();
+  if (ctrl) controllers.add(ctrl);
+  const sig = signal || (ctrl && ctrl.signal);
+  const payload = state.storageEpoch != null && body && typeof body === "object"
+    ? { ...body, epoch: state.storageEpoch }
+    : body;
+  try {
+    const resp = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: sig,
+    });
+    const sub = await resp.json();
+    if (sub.stale) return sub;           // 纪元校验失败，直接返回
+    if (!sub.ok || !sub.job_id) return { ok: false, error: sub.error || "提交失败" };
+    // 代理端口已被顶替：立即同步地址（不用等轮询结果）
+    if (sub.proxy_swapped) adoptProxy(sub.proxy_swapped);
+
+    // ② 轮询：首轮延迟 1s 给子进程启动时间
+    await new Promise((r) => setTimeout(r, POLL_START));
+    if (sig && sig.aborted) return { ok: false, error: "AbortError", aborted: true };
+
+    const deadline = Date.now() + POLL_TIMEOUT;
+    const statusUrl = `/api/fetch/status?job_id=${sub.job_id}`;
+    while (Date.now() < deadline) {
+      if (sig && sig.aborted) return { ok: false, error: "AbortError", aborted: true };
+      const poll = await fetch(statusUrl, { signal: sig });
+      if (poll.status === 200) return await poll.json();   // 完成：拿到完整结果
+      if (poll.status === 204) {                           // 还在跑：等待下次轮询
+        await new Promise((r) => setTimeout(r, POLL_MS));
+        continue;
+      }
+      // 404（任务丢失）或其他错误：立即报错
+      return { ok: false, error: `轮询状态异常：HTTP ${poll.status}` };
+    }
+    return { ok: false, error: "抓取超时（5 分钟无响应）" };
+  } catch (e) {
+    if (e && e.name === "AbortError") return { ok: false, error: "AbortError", aborted: true };
+    return { ok: false, error: "请求失败：" + e.message };
+  } finally {
+    if (ctrl) controllers.delete(ctrl);
+  }
+}
+
 /* ---------- 抓取（添加 / 重新抓取） ---------- */
 
 export async function fetchRecord(url) {
@@ -43,10 +110,8 @@ export async function fetchRecord(url) {
   $("addBtn").disabled = true;
   setStatus(`正在抓取 ${url} …（三级降级，可能需要数秒到一两分钟）`, "busy");
   try {
-    const data = await postFetch("/api/fetch", { url, proxy });
-    if (data.proxy_swapped) adoptProxy(data.proxy_swapped);   // 坏端口被服务端顶替
+    const data = await fetchJob("/api/fetch", { url, proxy });
     if (data.stale) {
-      // 抓取期间切换了存储：服务端已丢弃结果，本机也绝不入库
       setStatus("存储已切换，本次抓取结果已丢弃");
       return null;
     }
@@ -55,13 +120,10 @@ export async function fetchRecord(url) {
       return null;
     }
     upsert(data.record);
-    updateCard(data.record);   // 就地补丁，别整页重绘（会闪）
+    updateCard(data.record);
     if (state.detailTarget && state.detailTarget.url === data.record.url) {
       openDetail(data.record);
     }
-    /* 判成败用响应里的 success（本次抓取），别用 data.record.success：
-       快照导入的记录抓失败时按合并规则保留旧内容，success 还是入库时的 1，
-       拿它判断会把「三级全失败」报成「已抓取」 */
     const fetched = data.success === undefined ? !!data.record.success : data.success;
     setStatus(
       fetched

@@ -26,7 +26,7 @@ from almond.core.fetcher import get_metadata
 from almond.core.log import logger
 
 _CTX = mp.get_context("spawn")     # 统一 spawn：Windows 必须，POSIX 上避 fork+线程
-_WORKERS = 5                        # 与前端补抓 5 并发一一对应
+_WORKERS = 8                        # 与前端补抓 5 并发一一对应
 _WAIT_TIMEOUT = 400.0              # 单任务看门狗：正常超时链远短于此，防子进程挂死
 
 # 「一代」= 一对 mp.Queue + 一个读线程 + 本代子进程。
@@ -37,6 +37,7 @@ _WAIT_TIMEOUT = 400.0              # 单任务看门狗：正常超时链远短�
 _gen: dict | None = None           # {"in_q", "out_q", "retired"}
 _procs: list = []
 _jobs: dict = {}                   # job_id → threading.Queue（结果或 None=已被硬停）
+_job_epochs: dict = {}             # job_id → 提交时的存储纪元（异步模式：提交与结果处理分属不同请求）
 _lock = threading.Lock()
 _next_id = itertools.count(1)
 
@@ -196,12 +197,17 @@ def _ensure_pool() -> None:
         logger.info(f"抓取子进程池：拉起 {started} 个子进程（本代共 {len(_procs)}）")
 
 
-def submit(**kwargs) -> int:
-    """提交一个 get_metadata 任务，返回 job_id（配合 wait 收结果）。"""
+def submit(epoch: int = 0, **kwargs) -> int:
+    """提交一个 get_metadata 任务，返回 job_id（配合 wait/peek 收结果）。
+
+    epoch：提交时的存储纪元——异步模式下提交与结果处理分属不同请求线程，
+    后者需要知道提交时的纪元来做 stale 判定（存储切换后旧结果作废）。
+    """
     with _lock:
         _ensure_pool()
         job_id = next(_next_id)
         _jobs[job_id] = queue.Queue()
+        _job_epochs[job_id] = epoch
         in_q = _gen["in_q"]
     in_q.put((job_id, kwargs))
     return job_id
@@ -225,7 +231,37 @@ def wait(job_id: int, timeout: float = _WAIT_TIMEOUT):
         raise TimeoutError(f"抓取子进程 {int(timeout)}s 无响应") from None
     with _lock:
         _jobs.pop(job_id, None)
+        _job_epochs.pop(job_id, None)
     return item
+
+
+def peek(job_id: int) -> dict:
+    """非阻塞查询任务结果（供异步 /api/fetch/status 轮询）。
+
+    返回 {"done": True, "result": (meta, effects)}  或  {"done": False}。
+    任务被硬停（切库）时 result=None，done=True。
+    """
+    with _lock:
+        jq = _jobs.get(job_id)
+        epoch = _job_epochs.get(job_id, 0)
+    if jq is None:
+        # 任务已被 cancel_all 清掉（切库），或从未存在
+        return {"done": True, "result": None, "epoch": epoch}
+    try:
+        item = jq.get_nowait()
+    except queue.Empty:
+        return {"done": False, "epoch": epoch}
+    # 任务完成：拿到结果，清理元数据
+    with _lock:
+        _jobs.pop(job_id, None)
+        _job_epochs.pop(job_id, None)
+    return {"done": True, "result": item, "epoch": epoch}
+
+
+def get_job_epoch(job_id: int) -> int:
+    """查询任务的提交纪元（供 /api/fetch/status 做 stale 判定）。"""
+    with _lock:
+        return _job_epochs.get(job_id, 0)
 
 
 def cancel_all() -> None:
@@ -239,6 +275,7 @@ def cancel_all() -> None:
     with _lock:
         jobs = list(_jobs.values())
         _jobs.clear()
+        _job_epochs.clear()          # 纪元映射一并清掉，不留陈年 stale 数据
         procs = list(_procs)
         _procs.clear()
         gen, _gen = _gen, None
