@@ -7,16 +7,15 @@
    - 视图两态（prefs.view：卡片/列表）：卡片 = 复用 cards.createCard 的网格
      （与看板同款，分片建卡），列表 = .dp-row 行（路径/详情摘要等字段展示）。
      行与卡都带 data-url + .card-check，多选与 7 个批量动作在两种视图下原样可用。 */
-import { appendCardsChunked, render, syncCardIntrinsic } from "./board.js";
-import { createCard } from "./cards.js";
-import { openDetail } from "./detail.js";
-import { fetchRecord } from "./fetch.js";
-import { openRename, openTag } from "./modals.js";
+import { appendCardsChunked, syncCardIntrinsic } from "./board.js";
+import { apiPatch } from "./api.js";
+import { emit } from "./bus.js";
 import {
-  loadDomainConfig, loadProxyDomains, loadRecords,
-  matchesFilter, matchesTag, removeRecord,
-} from "./records.js";
-import { $, el, setStatus, state } from "./state.js";
+  makeCheckbox, makeRecordActions, makeTagBadges, statusDotClass, statusDotTitle,
+} from "./cards.js";
+import { buildSettingsForm, saveDomainSettings } from "./domain-settings.js";
+import { matchesFilter, matchesTag } from "./records.js";
+import { $, el, state } from "./state.js";
 
 const HASH_PREFIX = "#/domain/";
 const DEFAULT_FIELDS = ["url", "tags", "details"];
@@ -39,7 +38,7 @@ export function leaveDomainPage() {
   if (!state.domainPage) return;
   state.domainPage = null;
   if (location.hash) location.hash = "";
-  render();
+  emit("render");
 }
 
 /* 地址栏 → state。返回「是否变化」，调用方据此决定要不要 render；
@@ -79,11 +78,8 @@ function savePrefs(domain, prefs) {
   const cfg = state.domainConfig.get(domain) || {};
   cfg.prefs = prefs;
   state.domainConfig.set(domain, cfg);
-  fetch("/api/domain", {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: domain, prefs }),
-  }).then((r) => r.json()).catch(() => { /* 偏好丢了下次再存，不打断操作 */ });
+  apiPatch("/api/domain", { name: domain, prefs })
+    .catch(() => { /* 偏好丢了下次再存，不打断操作 */ });
 }
 
 function statusRank(r) {
@@ -166,7 +162,7 @@ function fillDomainHeader(domain, cfg, shown) {
   toggle.addEventListener("click", () => {
     settingsOpen = !settingsOpen;
     if (!settingsOpen) box.innerHTML = "";    // 关掉时重建，顺带销毁表单
-    render();
+    emit("render");
   });
 
   head.append(back, mid, toggle);
@@ -185,115 +181,28 @@ function statsText(domain, shown) {
 }
 
 /* ---------- 域名设置（信息 + 抓取规则，一次 PATCH 提交） ---------- */
+/* 表单本体在 domain-settings.js（与代理面板弹窗共用一份实现）；
+   这里只接「全字段 + 保存/重置后的子页收尾」。 */
 
 function buildSettings(domain, cfg) {
-  const box = el("div", "dp-settings");
-
-  const field = (labelText, node, hint) => {
-    const wrap = el("div", "dp-field");
-    const label = el("label", null, labelText);
-    label.appendChild(node);
-    wrap.appendChild(label);
-    if (hint) wrap.appendChild(el("div", "dp-hint", hint));
-    return wrap;
-  };
-
-  const alias = el("input", "input");
-  alias.value = cfg.display_name || "";
-  alias.placeholder = "显示别名，如：深度求索";
-  alias.spellcheck = false;
-
-  const proxy = el("select", "input");
-  proxy.innerHTML = `<option value="">代理：跟随全局</option>
-    <option value="1">代理：强制走代理</option>
-    <option value="0">代理：强制直连</option>`;
-  proxy.value = cfg.need_proxy === null || cfg.need_proxy === undefined ? "" : (cfg.need_proxy ? "1" : "0");
-
-  const auto = el("select", "input");
-  auto.innerHTML = `<option value="">自动补抓：跟随全局</option>
-    <option value="1">自动补抓：开</option>
-    <option value="0">自动补抓：关（补抓不碰这个域名）</option>`;
-  auto.value = cfg.auto_fetch === null || cfg.auto_fetch === undefined ? "" : (cfg.auto_fetch ? "1" : "0");
-
-  const cover = el("select", "input");
-  cover.innerHTML = `<option value="">封面：默认（og:image）</option>
-    <option value="0">封面：不要封面</option>
-    <option value="1">封面：只要图标</option>`;
-  cover.value = cfg.cover === null || cfg.cover === undefined ? "" : (cfg.cover ? "1" : "0");
-
-  const selector = el("input", "input");
-  selector.value = cfg.detail_selector || "";
-  selector.placeholder = "留空用默认 .space-y-2 > *";
-  selector.spellcheck = false;
-
+  const box = buildSettingsForm(domain, cfg, {
+    onResetDone: (data) => {
+      /* 旧域名没了：直接把子页切到新域名（不是退回看板） */
+      settingsOpen = false;
+      goToDomain(data.new);
+    },
+  });
   const save = el("button", "btn-primary", "保存设置");
-  save.addEventListener("click", async () => {
-    setStatus(`保存 ${domain} 的域名设置…`, "busy");
-    const resp = await fetch("/api/domain", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: domain,
-        display_name: alias.value.trim(),
-        need_proxy: proxy.value === "" ? null : proxy.value === "1",
-        auto_fetch: auto.value === "" ? null : auto.value === "1",
-        cover: cover.value === "" ? null : cover.value === "1",
-        detail_selector: selector.value.trim(),
-      }),
-    });
-    const data = await resp.json();
-    if (!data.ok) { setStatus("保存失败：" + data.error, "err"); return; }
-    await Promise.all([loadDomainConfig(), loadProxyDomains()]);
-    $("domainHeader").innerHTML = "";   // 强制下次重建，表单拿到新值
-    setStatus(`已保存 ${domain} 的域名设置`);
-    render();
-  });
-
-  box.appendChild(field("显示别名", alias));
-  box.appendChild(field("代理", proxy));
-  box.appendChild(field("自动补抓", auto));
-  box.appendChild(field("封面来源", cover,
-    "默认取 og:image；「不要封面」抓完后清空封面（显示字母占位），「只要图标」用站点图标当封面。对**之后的重新抓取**生效"));
-  box.appendChild(field("详情字段选择器", selector,
-    "按站点覆盖默认的 .space-y-2 > *；选择器无效时详情为空（不报错），同样对之后的抓取生效"));
-
-  /* 域名重置：危险操作单独一行 + 二次确认 */
-  const resetWrap = el("div", "dp-field");
-  const resetLabel = el("label", null, "域名重置（原域名挂了就换到新域名，不可撤销）");
-  const line = el("div", "proxy-row");
-  const resetInput = el("input", "input");
-  resetInput.placeholder = "新域名，如 example.com";
-  resetInput.spellcheck = false;
-  const resetBtn = el("button", "btn-danger", "替换");
-  resetBtn.addEventListener("click", async () => {
-    const next = resetInput.value.trim();
-    if (!next) { setStatus("请填写新域名", "err"); resetInput.focus(); return; }
-    if (!confirm(`确定把 ${domain} 全部替换为 ${next}？\n记录链接、封面、域名规则与代理规则都会改写，不可撤销。`)) return;
-    setStatus(`域名重置 ${domain} → ${next}…`, "busy");
-    const resp = await fetch("/api/domain/replace", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ old: domain, new: next }),
-    });
-    const data = await resp.json();
-    if (!data.ok) { setStatus("域名重置失败：" + data.error, "err"); return; }
-    setStatus(
-      `域名重置 ${data.old} → ${data.new}：共 ${data.total} 条，成功 ${data.records}，` +
-      `重复 ${data.merged}，失败 ${data.failed}` + (data.rules ? `，改写规则 ${data.rules} 条` : "")
-    );
-    /* 旧域名没了：直接把子页切到新域名（不是退回看板） */
-    settingsOpen = false;
-    goToDomain(data.new);
-    await Promise.all([loadRecords(), loadDomainConfig(), loadProxyDomains()]);
-    render();
-  });
-  line.append(resetInput, resetBtn);
-  resetLabel.appendChild(line);
-  resetWrap.appendChild(resetLabel);
-
+  save.addEventListener("click", () =>
+    saveDomainSettings(domain, box, {
+      onDone: () => {
+        $("domainHeader").innerHTML = "";   // 强制下次重建，表单拿到新值
+        emit("render");
+      },
+    }));
   const actions = el("div", "dp-settings-actions");
   actions.appendChild(save);
-  box.append(resetWrap, actions);
+  box.appendChild(actions);
   return box;
 }
 
@@ -311,7 +220,7 @@ function buildToolbar(domain, prefs) {
   view.addEventListener("change", () => {
     prefs.view = view.value;
     savePrefs(domain, prefs);
-    render();
+    emit("render");
     const wrap = document.querySelector(".board-wrap");
     if (wrap) wrap.scrollTop = 0;
   });
@@ -326,7 +235,7 @@ function buildToolbar(domain, prefs) {
   sort.addEventListener("change", () => {
     prefs.sort = sort.value;
     savePrefs(domain, prefs);
-    render();
+    emit("render");
   });
   bar.appendChild(sort);
 
@@ -343,7 +252,7 @@ function buildToolbar(domain, prefs) {
           ? [...new Set([...prefs.fields, key])]
           : prefs.fields.filter((f) => f !== key);
         savePrefs(domain, prefs);
-        render();
+        emit("render");
       });
       label.append(cb, document.createTextNode(labelText));
       bar.appendChild(label);
@@ -361,7 +270,7 @@ function buildToolbar(domain, prefs) {
     state.selectedTag = tag.value || null;
     prefs.tag = state.selectedTag || "";
     savePrefs(domain, prefs);
-    render();
+    emit("render");
   });
   bar.appendChild(tag);
   return bar;
@@ -377,17 +286,12 @@ function buildRow(record, prefs) {
   const row = el("div", "dp-row");
   row.dataset.url = record.url;
 
-  /* 复用卡片复选框的类名与 #board 上的委托监听：多选、#selBar、
-     7 个批量动作在子页里全部原样可用（state.selectedUrls 本来就按 url 存） */
-  const cb = el("input", "card-check");
-  cb.type = "checkbox";
-  cb.checked = state.selectedUrls.has(record.url);
-  cb.title = record.url;
-  if (cb.checked) row.classList.add("selected");
-  row.appendChild(cb);
+  /* 复选框 / 状态点 / 标签徽标 / 操作按钮都用 cards.js 的共用解剖件：
+     与看板卡片同款类名，多选、#selBar、7 个批量动作在子页原样可用 */
+  row.appendChild(makeCheckbox(record, row));
 
-  const dot = el("span", "dot " + (!record.fetched ? "pending" : record.success ? "ok" : "fail"));
-  dot.title = !record.fetched ? "还没抓取" : record.success ? "抓取成功" : "抓取失败";
+  const dot = el("span", "dot " + statusDotClass(record));
+  dot.title = statusDotTitle(record);
   row.appendChild(dot);
 
   const main = el("div", "dp-main");
@@ -403,7 +307,7 @@ function buildRow(record, prefs) {
   if (prefs.fields.includes("url")) meta.appendChild(el("span", "dp-path", prettyPath(record.url)));
   if (prefs.fields.includes("tags") && record.tags && record.tags.length) {
     const tags = el("span", "dp-tags");
-    for (const t of record.tags) tags.appendChild(el("span", "tag-badge", t.name));
+    tags.append(...makeTagBadges(record.tags));
     meta.appendChild(tags);
   }
   if (prefs.fields.includes("details") && record.details && record.details.length) {
@@ -414,21 +318,7 @@ function buildRow(record, prefs) {
 
   /* 行内操作：与卡片同款 stopPropagation；闭包取 row.__record（补丁会更新它） */
   row.__record = record;
-  const acts = el("div", "dp-acts");
-  const mk = (labelText, title, fn) => {
-    const b = el("button", "dp-act", labelText);
-    b.title = title;
-    b.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); fn(); });
-    return b;
-  };
-  acts.append(
-    mk("详情", "查看详情字段", () => openDetail(row.__record)),
-    mk("重抓", "重新抓取这条", () => fetchRecord(row.__record.url)),
-    mk("改名", "重命名", () => openRename(row.__record)),
-    mk("标签", "给这一条打标签", () => openTag(row.__record)),
-    mk("删", "删除这条记录", () => removeRecord(row.__record)),
-  );
-  row.appendChild(acts);
+  row.appendChild(makeRecordActions(row, "row"));
   return row;
 }
 
@@ -444,7 +334,7 @@ export function updateDomainRow(record) {
   const row = document.querySelector(`#board .dp-row[data-url="${CSS.escape(record.url)}"]`);
   if (!row) return false;
   /* 标题改到筛选条件外 → 只能整页重排（与卡片的兜底一致） */
-  if (!matchesFilter(record) || !matchesTag(record)) { render(); return true; }
+  if (!matchesFilter(record) || !matchesTag(record)) { emit("render"); return true; }
   row.__record = record;
   const link = row.querySelector(".dp-link");
   if (link) {
@@ -453,8 +343,8 @@ export function updateDomainRow(record) {
   }
   const dot = row.querySelector(".dot");
   if (dot) {
-    dot.className = "dot " + (!record.fetched ? "pending" : record.success ? "ok" : "fail");
-    dot.title = !record.fetched ? "还没抓取" : record.success ? "抓取成功" : "抓取失败";
+    dot.className = "dot " + statusDotClass(record);
+    dot.title = statusDotTitle(record);
   }
   const brief = row.querySelector(".dp-brief");
   if (brief) brief.textContent = briefText(record);

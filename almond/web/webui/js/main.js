@@ -3,6 +3,7 @@
 "use strict";
 
 import { recomputePendingGrids, render, syncCardIntrinsic } from "./board.js";
+import { on } from "./bus.js";
 import { backfillState, forceBackfill, handleBackfillClick, startBackfill, toggleBackfill } from "./backfill.js";
 import { updateCard } from "./cards.js";
 import { closeDetail } from "./detail.js";
@@ -10,7 +11,7 @@ import { applyPrefsTag, leaveDomainPage, syncDomainRoute } from "./domain-page.j
 import { addUrl, fetchRecord } from "./fetch.js";
 import { doExport, importFromFile } from "./io.js";
 import { addNewTag, submitRename } from "./modals.js";
-import { addDomainRule, addRule, detectProxy, openProxyPanel, refreshDomainTests, resetDomain, saveDomain, saveGlobalProxy } from "./proxy-panel.js";
+import { addDomainRule, addRule, detectProxy, openProxyPanel, refreshDomainTests, saveDomain, saveGlobalProxy } from "./proxy-panel.js";
 import { getVisibleRecords, loadDomainConfig, loadProxyDomains, loadRecords } from "./records.js";
 import { initSelectBar } from "./selectbar.js";
 import { buildSidebar } from "./sidebar.js";
@@ -21,6 +22,10 @@ import { fsState, loadFs, openDbPanel, saveDbPath } from "./storage.js";
 /* ---------- 事件绑定 ---------- */
 
 function init() {
+  /* render / updateCard 两条跨模块回调边走极简总线——订阅只在这一处（bus.js 契约） */
+  on("render", render);
+  on("updateCard", updateCard);
+
   $("sidebarToggle").addEventListener("click", () => {
     $("sidebar").classList.toggle("collapsed");
     // 宽度过渡结束后列数才定下来，届时同步卡片实测尺寸 + 重算占位高度
@@ -111,10 +116,6 @@ function init() {
   });
 
   $("domainSave").addEventListener("click", saveDomain);
-  $("domainResetBtn").addEventListener("click", resetDomain);
-  $("domainResetInput").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") resetDomain();
-  });
   $("domainCancel").addEventListener("click", () => {
     $("domainMask").hidden = true;
     state.domainTarget = null;

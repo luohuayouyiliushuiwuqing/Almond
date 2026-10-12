@@ -49,9 +49,11 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 try:
-    from almond.core import fetch_hints
+    from almond.core import fetch_hints, hints_cookie, hints_strategy
+    from almond.core.proxy import proxy_reachable
 except Exception:  # noqa: BLE001 —— 不在仓库里跑时退化为无经验缓存的裸测试
-    fetch_hints = None
+    fetch_hints = hints_cookie = hints_strategy = None
+    proxy_reachable = None
 
 try:
     from almond.core.log import logger, set_level
@@ -204,8 +206,8 @@ def test_url(url: str, timeout: int, proxy: str | None,
 
     # 智能模式：已有可行策略 **或 Cookie** → 分层用例不再重跑，只经 fetch_page 做单发直取。
     # 分层是裸调 scrapling 的（不吃策略/经验短路），全量跑只在 --full 或还没学出东西时做。
-    strat = fetch_hints.get_strategy(url) if fetch_hints else None
-    cookie = fetch_hints.get_cookie(url) if fetch_hints else None
+    strat = hints_strategy.get_strategy(url) if fetch_hints else None
+    cookie = hints_cookie.get_cookie(url) if fetch_hints else None
     if smart and (strat or cookie):
         if strat and cookie:
             note = (f"已有 Cookie + 策略 {strat['id']}（最快 {strat.get('best_ms')}ms），"
@@ -225,7 +227,7 @@ def test_url(url: str, timeout: int, proxy: str | None,
 
     # 代理端口在 ≠ 能用：先做转发健康检查，不通就别把每层都拖到超时
     usable = proxy
-    if proxy and fetch_hints and not fetch_hints.proxy_reachable(proxy):
+    if proxy and fetch_hints and not proxy_reachable(proxy):
         usable = None
         logger.warning(f"⚠ 代理 {proxy} 转发不通（健康检查失败）：走代理用例快速失败，其余降级直连")
 
@@ -249,7 +251,7 @@ def test_url(url: str, timeout: int, proxy: str | None,
     def via_proxy():
         if not proxy:
             raise Skip("没有可用代理（--proxy 或端口探测均为空）")
-        if fetch_hints and not fetch_hints.proxy_reachable(proxy):
+        if fetch_hints and not proxy_reachable(proxy):
             raise AssertionError(
                 f"代理 {proxy} 端口在但转发不通（健康检查失败）→ 不跑抓取，待恢复后重试")
         resp = Fetcher.get(url, timeout=timeout, proxy=proxy)
@@ -301,10 +303,10 @@ def _almond_case(url: str, timeout: int, proxy: str | None) -> None:
             reason = fetch_hints.skip_reason(url, proxy) if fetch_hints else None
             raise AssertionError(reason or "get_metadata success=False（三级降级链全部失败）")
         assert_true(bool(meta.get("title")), "提取不到标题 title=''")
-        strat = fetch_hints.get_strategy(url) if fetch_hints else None
+        strat = hints_strategy.get_strategy(url) if fetch_hints else None
         sid = f"{strat['id']}（最快 {strat['best_ms']}ms）" if strat and strat.get("best_ms") is not None \
             else (strat["id"] if strat else "无")
-        ck = fetch_hints.get_cookie(url) if fetch_hints else None
+        ck = hints_cookie.get_cookie(url) if fetch_hints else None
         ck_note = (f" · Cookie=有（最快 {ck['best_ms']}ms）" if ck and ck.get("best_ms") is not None
                    else (" · Cookie=有" if ck else ""))
         return (f"title={meta['title'][:60]} · thumbnail={'有' if meta['thumbnail'] else '无'}"
@@ -344,7 +346,7 @@ def main() -> int:
         if not fetch_hints:
             logger.error("经验缓存不可用（almond 未导入），无法写入 Cookie")
             return 2
-        fetch_hints.set_cookie(targets[0], args.cookie)
+        hints_cookie.set_cookie(targets[0], args.cookie)
         logger.info(f"已写入 Cookie：{targets[0]}（{len(args.cookie)} 字符）→ 本次优先 Cookie 直取")
     logger.info(f"目标: {targets}")
     logger.info(f"超时: {args.timeout}s · 浏览器引擎: {'跳过' if args.no_browser else '启用'}"

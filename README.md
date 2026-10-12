@@ -127,8 +127,8 @@ python -m almond.web.demo.server
 | POST | `/api/proxy-rule` | `{pattern, need_proxy}` 新增 / 更新规则 |
 | DELETE | `/api/proxy-rule?id=…` | 删除规则 |
 | GET | `/api/proxy-domains` | 最终会走代理的根域名（侧栏徽标数据源） |
-| GET、POST | `/api/proxy-detect` | 探测本机 7889-7899 代理端口并**验证转发可用**，返回可用地址或 `null`（只开着不转发的坏端口不算） |
-| GET | `/api/storage-dir` | 当前存储目录 / 数据库 / 缓存路径（旧 `/api/db-path` 等价） |
+| POST | `/api/proxy-detect` | 探测本机 7889-7899 代理端口并**验证转发可用**，返回可用地址或 `null`（只开着不转发的坏端口不算） |
+| GET | `/api/storage-dir` | 当前存储目录 / 数据库 / 缓存路径 |
 | POST | `/api/storage-dir` | `{path}` 切换存储目录（**不迁移**：旧数据留在原地、新目录从零开始；响应 `records` = 新目录记录数，`epoch` +1 作废在途抓取） |
 | DELETE | `/api/storage-history?path=…` | 从存储目录的历史位置里移除一条（当前目录不可移除） |
 | GET | `/api/fs/list?path=…` | 目录浏览（空 path 返回盘符 / 根，供界面点选目录） |

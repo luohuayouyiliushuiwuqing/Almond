@@ -1,6 +1,5 @@
 /* 详情弹层：按需抓取 + 字段渲染。 */
 import { fetchRecord } from "./fetch.js";
-import { upsert } from "./records.js";
 import { $, el, state } from "./state.js";
 
 /* ---------- 详情弹层（展示 .space-y-2 提取的标签值字段） ---------- */

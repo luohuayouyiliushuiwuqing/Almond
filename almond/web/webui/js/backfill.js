@@ -1,11 +1,11 @@
 /* 补抓队列：自动补抓只跑 fetched=0（从未抓过的记录）；同一个按钮的人工点击
    是**强制补抓**，连抓过失败的一起重跑。两者都不改服务端，只是入队集合不同。 */
-import { updateCard } from "./cards.js";
+import { apiGet, apiPost, fetchJob } from "./api.js";
+import { emit } from "./bus.js";
 import { openDetail } from "./detail.js";
-import { fetchJob, postFetch } from "./fetch.js";
 import { detectProxy } from "./proxy-panel.js";
 import { loadDomainConfig, loadRecords, upsert } from "./records.js";
-import { $, adoptProxy, hostOf, rootDomain, setStatus, state } from "./state.js";
+import { $, hostOf, rootDomain, setStatus, state } from "./state.js";
 
 /* urls=待抓（出队即删）；total/ok/fail 是本轮计数；
    running=worker 在跑；paused=已暂停（暂停位落 localStorage，
@@ -92,7 +92,7 @@ async function confirmDomains(names) {
   if (!todo.length) return false;   // 同域名已在确认中：别再叠一层
   setStatus(`正在确认 ${todo.length} 个域名的抓取方案（挑真实网址试抓）…`, "busy");
   try {
-    const data = await postFetch("/api/confirm", {
+    const data = await apiPost("/api/confirm", {
       domains: todo, proxy: state.globalProxy,
     });
     if (!data || data.stale) return false;          // 切库作废，下一轮重来
@@ -178,7 +178,7 @@ function paintButton() {
 
 /* ---------- 切换存储等场景：整队作废 ---------- */
 
-/** 立即清空补抓队列并使旧轮次作废（在途请求由 abortAllFetches 中止、
+/** 立即清空补抓队列并使旧轮次作废（在途请求由 abortAll 中止、
     服务端以存储纪元丢弃结果；这里的代际让旧 worker/轮询收口时不再碰任何状态）。 */
 export function resetBackfill() {
   backfillState.gen++;
@@ -294,9 +294,9 @@ function pollPending() {
   const gen = backfillState.gen;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 8000);   // 8 秒超时：后端卡住时不会永久挂起
-  fetch("/api/records/pending", { signal: ctrl.signal })
-    .then((r) => { clearTimeout(timer); return r.json(); })
+  apiGet("/api/records/pending", { signal: ctrl.signal })
     .then((data) => {
+      clearTimeout(timer);
       if (gen !== backfillState.gen) return;   // 已切存储：本响应作废，不入队也不续轮询
       const urls = (data && data.urls) || [];
       /* 有本地列表里还没有的记录 → 先补一次列表再入队：出队复查会把
@@ -429,7 +429,7 @@ async function runBackfill() {
           const fetched = data.success === undefined ? !!data.record.success : data.success;
           if (fetched) backfillState.ok++;
           else backfillState.fail++;
-          updateCard(data.record);   // 就地补丁，不整页重绘（会闪）
+          emit("updateCard", data.record);   // 就地补丁，不整页重绘（会闪）
           // 详情弹层正开着这条 → 同步刷新，否则还是「详情尚未抓取」的旧文案
           if (state.detailTarget && state.detailTarget.url === data.record.url) {
             openDetail(data.record);

@@ -57,7 +57,7 @@ _REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from almond.core import fetch_hints, records  # noqa: E402
+from almond.core import fetch_hints, hints_cookie, hostutil  # noqa: E402
 from almond.core.fetcher import fetch_page, get_metadata  # noqa: E402
 from almond.core.log import logger  # noqa: E402
 
@@ -117,7 +117,7 @@ def _parse_cookie_json(raw: str, root: str) -> tuple[dict, int]:
 
 
 def _cookie_names(ck: dict | None) -> list[str]:
-    return sorted(fetch_hints.parse_cookie_header((ck or {}).get("value", "")).keys())
+    return sorted(hints_cookie.parse_cookie_header((ck or {}).get("value", "")).keys())
 
 
 def _show(ck: dict | None, show_value: bool) -> str:
@@ -154,7 +154,7 @@ def main() -> int:
         print("FAIL 参数：URL 必须以 http:// 或 https:// 开头")
         return 1
     proxy = (args.proxy or "").strip() or None
-    root = records._root_domain(url) or url
+    root = hostutil.root_domain(url) or url
 
     print(f"目标：{url}")
     print(f"代理：{proxy or '（直连）'}")
@@ -172,8 +172,8 @@ def main() -> int:
             print(f"FAIL ① {exc}")
             return 1
         header = "; ".join(f"{k}={v}" for k, v in kv.items())
-        fetch_hints.set_cookie(url, header)   # 人工写入 = 覆盖旧值 + 解除失效防抖
-        after = fetch_hints.get_cookie(url)
+        hints_cookie.set_cookie(url, header)   # 人工写入 = 覆盖旧值 + 解除失效防抖
+        after = hints_cookie.get_cookie(url)
         ok1 = True
         print(f"PASS ① 已导入 {len(kv)} 个键：{', '.join(kv)}"
               + (f"（丢弃其它域名 {foreign} 条）" if foreign else "")
@@ -182,9 +182,9 @@ def main() -> int:
         if args.fresh:
             # 人工写入空值 = 清空 Cookie 且顺带解除失效防抖（set_cookie 的既定语义），
             # 让 ① 重新走一遍纯净的「抓 Set-Cookie」链路
-            fetch_hints.set_cookie(url, "")
+            hints_cookie.set_cookie(url, "")
             print("① 已按 --fresh 清空存量 Cookie，重新抓取…")
-        before = fetch_hints.get_cookie(url)
+        before = hints_cookie.get_cookie(url)
         if before:
             print(f"① 存量 Cookie：{_show(before, args.show_cookie)}（本次响应若有轮换会合并刷新）")
         print(f"① 抓取 Set-Cookie：{url} …")
@@ -197,8 +197,8 @@ def main() -> int:
             return 1
         # fetch_page 成功时已自动收过（harvest-on-any-success）；显式再收一次幂等，
         # 同时让「① 在收 Cookie」这件事在脚本里看得见
-        got_new = fetch_hints.store_cookie_from_response(url, resp)
-        after = fetch_hints.get_cookie(url)
+        got_new = hints_cookie.store_cookie_from_response(url, resp)
+        after = hints_cookie.get_cookie(url)
         if after:
             new_keys = set(_cookie_names(after)) - set(_cookie_names(before))
             ok1 = True
@@ -221,7 +221,7 @@ def main() -> int:
     finally:
         logger.remove(sink)
     ms2 = round((time.time() - t1) * 1000)
-    ck_after = fetch_hints.get_cookie(url)
+    ck_after = hints_cookie.get_cookie(url)
 
     # 判定「确实走了 Cookie 直取」：
     #   last_success 只有 touch_cookie（Cookie 直取成功）会刷新——但它是秒级精度，

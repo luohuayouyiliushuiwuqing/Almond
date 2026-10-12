@@ -1,6 +1,7 @@
 /* 卡片驱动的弹窗：重命名、标签管理。 */
-import { render } from "./board.js";
-import { updateCard } from "./cards.js";
+import { apiDel, apiGet, apiPatch, apiPost } from "./api.js";
+import { emit } from "./bus.js";
+import { loadRecords } from "./records.js";
 import { $, el, setStatus, state } from "./state.js";
 
 /* ---------- 重命名 ---------- */
@@ -19,15 +20,10 @@ export async function submitRename() {
   $("modalMask").hidden = true;
   if (title === (record.title || "")) return;
   try {
-    const resp = await fetch("/api/record", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: record.url, title }),
-    });
-    const data = await resp.json();
+    const data = await apiPatch("/api/record", { url: record.url, title });
     if (data.ok) {
       record.title = title;
-      updateCard(record);   // 改名只动标题文字，不整页重绘
+      emit("updateCard", record);   // 改名只动标题文字，不整页重绘
       setStatus(`已重命名：${title || "(空)"}`);
     } else {
       setStatus("重命名失败：" + data.error, "err");
@@ -66,8 +62,7 @@ async function renderTagModal() {
   const recs = urls.map((u) => state.records.find((r) => r.url === u)).filter(Boolean);
   if (!recs.length) { box.textContent = "没有目标记录"; return; }
   try {
-    const resp = await fetch("/api/tags");
-    const data = await resp.json();
+    const data = await apiGet("/api/tags");
     const tags = data.tags || [];
     const hasAll = (id) => recs.every((r) => (r.tags || []).some((t) => t.id === id));
     for (const tag of tags) {
@@ -78,20 +73,13 @@ async function renderTagModal() {
         /* 对每条目标加/删同一个标签（单条时就是原来的那次请求） */
         for (const rec of recs) {
           if (on) {
-            await fetch(`/api/record/tag?url=${encodeURIComponent(rec.url)}&tag_id=${tag.id}`, { method: "DELETE" });
+            await apiDel(`/api/record/tag?url=${encodeURIComponent(rec.url)}&tag_id=${tag.id}`);
           } else {
-            await fetch("/api/record/tag", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ url: rec.url, tag_id: tag.id }),
-            });
+            await apiPost("/api/record/tag", { url: rec.url, tag_id: tag.id });
           }
         }
-        // 刷新记录数据
-        const recResp = await fetch("/api/records");
-        const recData = await recResp.json();
-        state.records = recData.records || [];
-        render();
+        // 刷新记录数据（走 loadRecords：顺带更新 storageEpoch 并重绘）
+        await loadRecords();
         renderTagModal();
       });
       box.appendChild(item);
@@ -103,10 +91,6 @@ export async function addNewTag() {
   const name = $("tagInput").value.trim();
   if (!name) return;
   $("tagInput").value = "";
-  await fetch("/api/tag", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
+  await apiPost("/api/tag", { name });
   renderTagModal();
 }

@@ -1,4 +1,5 @@
 /* 导入（两阶段：快照入库→自动补抓）与导出。补抓队列本身在 backfill.js。 */
+import { apiPost } from "./api.js";
 import { enqueueBackfill } from "./backfill.js";
 import { getVisibleRecords, loadRecords } from "./records.js";
 import { $, setStatus, state } from "./state.js";
@@ -102,12 +103,7 @@ export async function importFromFile(file) {
   let data;
   try {
     setStatus(`导入链接中…（${items.length} 条，不联网）`, "busy");
-    const resp = await fetch("/api/records/quick", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items }),
-    });
-    data = await resp.json();
+    data = await apiPost("/api/records/quick", { items });
     if (!data.ok) { setStatus("导入失败：" + data.error, "err"); return; }
   } catch (e) {
     setStatus("导入失败：" + e.message, "err");

@@ -1,5 +1,5 @@
 /* 左侧栏构建与「更多」溢出测量/展开。 */
-import { render } from "./board.js";
+import { emit } from "./bus.js";
 import { goToDomain, leaveDomainPage } from "./domain-page.js";
 import { $, MIN_GROUP, el, hostOf, rootDomain, state } from "./state.js";
 
@@ -8,7 +8,7 @@ import { $, MIN_GROUP, el, hostOf, rootDomain, state } from "./state.js";
 function filterTo(apply) {
   leaveDomainPage();
   apply();
-  render();
+  emit("render");
 }
 
 /* ---------- 侧边栏 ---------- */

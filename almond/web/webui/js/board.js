@@ -1,6 +1,6 @@
 /* render() 及其专属机制：分片建卡、懒建观察者、占位高度、滚动保持。 */
 import { createCard } from "./cards.js";
-import { goToDomain, renderDomainPage } from "./domain-page.js";
+import { renderDomainPage } from "./domain-page.js";
 import { getVisibleRecords } from "./records.js";
 import { syncSelectBar } from "./selectbar.js";
 import { buildSidebar } from "./sidebar.js";

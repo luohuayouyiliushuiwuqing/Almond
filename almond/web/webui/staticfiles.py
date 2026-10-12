@@ -41,3 +41,19 @@ def resolve_static(path: str) -> Path | None:
     if not candidate.resolve().is_relative_to(ROOT.resolve()):
         return None                            # 符号链接逃逸的双保险
     return candidate
+
+
+def serve(h, url_path: str) -> None:
+    """静态文件响应：`resolve_static` 命中就写 200，未命中回 404（响应写入也归本模块）。"""
+    file_path = resolve_static(url_path)
+    if file_path is None:
+        h.send_error(404)
+        return
+    body = file_path.read_bytes()
+    h.send_response(200)
+    h.send_header("Content-Type", CONTENT_TYPES[file_path.suffix])
+    h.send_header("Content-Length", str(len(body)))
+    # 静态文件禁缓存：改完代码浏览器总能拿到新版（否则旧 tab 会一直跑旧 JS）
+    h.send_header("Cache-Control", "no-store")
+    h.end_headers()
+    h.wfile.write(body)

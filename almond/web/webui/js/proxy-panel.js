@@ -1,105 +1,51 @@
 /* 代理映射面板 + 域名管理弹窗（它唯一的开启方）。 */
-import { render } from "./board.js";
+import { abortAll, apiDel, apiGet, apiPatch, apiPost } from "./api.js";
 import { backfillState, startBackfill } from "./backfill.js";
+import { buildSettingsForm, saveDomainSettings } from "./domain-settings.js";
 import { goToDomain } from "./domain-page.js";
-import { abortAllFetches } from "./fetch.js";
-import { loadDomainConfig, loadProxyDomains, loadRecords } from "./records.js";
+import { loadDomainConfig, loadProxyDomains } from "./records.js";
 import { $, el, setStatus, state } from "./state.js";
 
-/* ---------- 域名管理 ---------- */
+/* ---------- 域名管理（表单与保存/重置逻辑在 domain-settings.js，此处只接弹窗收尾） ---------- */
 
-export function openDomain(domainName) {
+let domainBox = null;   // 弹窗里挂的表单（saveDomain 从它收集字段）
+
+function openDomain(domainName) {
   state.domainTarget = domainName;
   $("domainTitle").textContent = `域名管理：${domainName}`;
-  $("domainResetOld").textContent = domainName;
-  $("domainResetInput").value = "";
-  // 从 API 获取域名信息
-  fetch("/api/domains").then(r => r.json()).then(data => {
-    const domain = (data.domains || []).find(d => d.name === domainName);
-    $("domainNameInput").value = domain?.display_name || "";
-    const np = domain?.need_proxy;   // null=跟随全局, true/false
-    $("domainNeedSelect").value = np === null || np === undefined ? "" : (np ? "1" : "0");
-  });
   $("domainMask").hidden = false;
-}
-
-/* 域名重置：原域名（含子域名）在库里的全部引用整体换成新域名 */
-export async function resetDomain() {
-  const old = state.domainTarget;
-  const next = $("domainResetInput").value.trim();
-  if (!old) return;
-  if (!next) { setStatus("请填写新域名", "err"); $("domainResetInput").focus(); return; }
-  const hint = `确定把 ${old} 全部替换为 ${next}？\n记录链接、封面、域名规则与代理规则都会改写，不可撤销。`;
-  if (!confirm(hint)) return;
-  try {
-    const resp = await fetch("/api/domain/replace", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ old, new: next }),
+  const host = $("domainFormHost");
+  host.innerHTML = "";
+  domainBox = null;
+  // 从 API 获取域名信息后挂载表单（精简版：别名 + 代理 + 域名重置）
+  apiGet("/api/domains").then(data => {
+    if (state.domainTarget !== domainName) return;   // 期间已关/切走
+    const cfg = (data.domains || []).find(d => d.name === domainName) || {};
+    domainBox = buildSettingsForm(domainName, cfg, {
+      fields: ["alias", "proxy", "reset"],
+      compact: true,
+      onResetDone: (data2) => {
+        $("domainMask").hidden = true;
+        state.domainTarget = null;
+        if (state.selectedDomain === domainName) state.selectedDomain = null;
+        /* 正看着这个域名的子页 → 把子页切到新域名（旧域名已经不存在了）。
+           先写 hash：下面 await 期间 hashchange 会把 state.domainPage 更新好 */
+        if (state.domainPage === domainName) goToDomain(data2.new);
+      },
     });
-    const data = await resp.json();
-    if (!data.ok) {
-      // 服务端单事务，走到这里必然是整体回滚——没有半截改动
-      setStatus("域名重置失败（未改动任何数据）：" + data.error, "err");
-      return;
-    }
-    $("domainMask").hidden = true;
-    state.domainTarget = null;
-    if (state.selectedDomain === old) state.selectedDomain = null;
-    /* 正看着这个域名的子页 → 把子页切到新域名（旧域名已经不存在了）。
-       先写 hash：下面 await 期间 hashchange 会把 state.domainPage 更新好 */
-    if (state.domainPage === old) goToDomain(data.new);
-    // 都要 await：两者的 render() 都会重写状态栏，提示必须放在最后
-    await loadRecords();
-    await loadProxyDomains();
-    await loadDomainConfig();
-    const total = data.total || 0;
-    const failed = data.failed || 0;
-    const rules = data.rules || 0;
-    if (!total) {
-      // 一条都没命中：多半是旧域名早就被清理过，别让人以为改了什么
-      setStatus(
-        rules
-          ? `域名重置 ${data.old} → ${data.new}：命中 0 条记录，改写规则 ${rules} 条`
-          : `域名重置 ${data.old} → ${data.new}：未找到任何包含该域名的记录，0 条改动`,
-        rules ? undefined : "err"
-      );
-      return;
-    }
-    setStatus(
-      `域名重置 ${data.old} → ${data.new}：共 ${total} 条，成功 ${data.records}` +
-      `，重复 ${data.merged || 0}，失败 ${failed}` +
-      (rules ? `，改写规则 ${rules} 条` : "") +
-      (failed && data.error ? `（${data.error}）` : ""),
-      failed ? "err" : undefined
-    );
-  } catch (e) {
-    setStatus("域名重置失败：" + e.message, "err");
-  }
+    host.appendChild(domainBox);
+  }).catch(() => setStatus("域名信息加载失败", "err"));
 }
 
 export async function saveDomain() {
   const name = state.domainTarget;
-  if (!name) return;
-  const display_name = $("domainNameInput").value.trim();
-  const sel = $("domainNeedSelect").value;
-  const need_proxy = sel === "" ? null : sel === "1";   // "" → null = 无规则
-  $("domainMask").hidden = true;
-  try {
-    await fetch("/api/domain", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, display_name, need_proxy }),
-    });
-    render();
-    loadProxyDomains(); // 域名规则变化 → 刷新侧边栏代理标记
-    loadDomainConfig(); // 别名/域名配置缓存也要跟着新（子页域头直接读它）
-    const label = need_proxy === null ? "跟随全局" : (need_proxy ? "用代理" : "直连");
-    setStatus(`已更新域名 ${name}（${label}）`);
-  } catch (e) {
-    setStatus("域名更新失败：" + e.message, "err");
-  }
-  state.domainTarget = null;
+  if (!name || !domainBox) return;
+  await saveDomainSettings(name, domainBox, {
+    onDone: () => {
+      $("domainMask").hidden = true;
+      state.domainTarget = null;
+    },
+  });
 }
 
 /* ---------- 代理映射面板 ---------- */
@@ -118,7 +64,7 @@ async function renderProxyPanel() {
   const ruleBox = $("ruleList");
   ruleBox.innerHTML = "";
   try {
-    const data = await (await fetch("/api/proxy-rules")).json();
+    const data = await apiGet("/api/proxy-rules");
     for (const rule of data.rules || []) {
       const row = el("div", "rule-row");
       row.appendChild(el("span", "rule-pattern", rule.pattern));
@@ -126,7 +72,7 @@ async function renderProxyPanel() {
         rule.need_proxy ? "用代理" : "直连"));
       const del = el("button", "rule-del", "删除");
       del.addEventListener("click", async () => {
-        await fetch(`/api/proxy-rule?id=${rule.id}`, { method: "DELETE" });
+        await apiDel(`/api/proxy-rule?id=${rule.id}`);
         renderProxyPanel();
         loadProxyDomains(); // 规则删除 → 刷新侧边栏代理标记
       });
@@ -147,7 +93,7 @@ async function renderProxyPanel() {
   dTestBox.innerHTML = "";
   selBox.innerHTML = '<option value="">选择域名…</option>';
   try {
-    const data = await (await fetch("/api/domains")).json();
+    const data = await apiGet("/api/domains");
     const all = (data.domains || []).slice().sort((a, b) => a.name.localeCompare(b.name));
     const isSpecified = (d) => d.need_proxy !== null && d.need_proxy !== undefined;
 
@@ -250,7 +196,7 @@ export async function refreshDomainTests() {
   const btn = $("testRefreshBtn");
   if (!btn) return;
   // 收集需要刷新的域名：未测试 / 无方案 / 方案失效
-  const data = await (await fetch("/api/domains")).json();
+  const data = await apiGet("/api/domains");
   const todo = (data.domains || [])
     .filter((d) => {
       const t = d.tested;
@@ -266,21 +212,16 @@ export async function refreshDomainTests() {
   btn.textContent = "确认中…";
 
   /* ── 暂停补抓，让出子进程池给确认阶段 ──
-     确认和补抓共用同一个 5 进程子进程池（fetchpool），同时跑会互相挤占：
+     确认和补抓共用同一个 8 进程子进程池（fetchpool；前端补抓 5 并发），同时跑会互相挤占：
      补抓占满 5 个 → 确认排队等；确认占满 → 补抓排队等。
      策略：暂停补抓 + 中止在途连接 → 子进程池全给确认 → 跑完再恢复补抓。 */
   const wasPaused = backfillState.paused;
   backfillState.paused = true;   // 仅内存态：不写 localStorage，恢复时按原值还原
-  abortAllFetches();              // 中止在途的 /api/fetch 轮询连接，释放浏览器连接槽
+  abortAll();              // 中止在途的 /api/fetch 轮询连接，释放浏览器连接槽
 
   setStatus(`正在重新确认 ${todo.length} 个域名的抓取方案…`, "busy");
   try {
-    const resp = await fetch("/api/confirm", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ domains: todo, proxy: state.globalProxy, epoch: state.storageEpoch }),
-    });
-    const result = await resp.json();
+    const result = await apiPost("/api/confirm", { domains: todo, proxy: state.globalProxy });
     if (result.stale) { setStatus("存储已切换，刷新作废"); return; }
     // 刷新面板
     await loadDomainConfig();
@@ -306,12 +247,7 @@ export async function refreshDomainTests() {
 
 async function patchNeedProxy(name, need_proxy) {
   try {
-    const resp = await fetch("/api/domain", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, need_proxy }),
-    });
-    const data = await resp.json();
+    const data = await apiPatch("/api/domain", { name, need_proxy });
     if (!data.ok) { setStatus("更新失败：" + data.error, "err"); return; }
     const label = need_proxy === null ? "跟随全局（已取消指定）" : (need_proxy ? "用代理" : "直连");
     setStatus(`已指定 ${name} → ${label}`);
@@ -348,7 +284,7 @@ export async function saveGlobalProxy() {
 
 export async function detectProxy({ fill = false, announce = true } = {}) {
   try {
-    const data = await (await fetch("/api/proxy-detect", { method: "POST" })).json();
+    const data = await apiPost("/api/proxy-detect", {});
     const found = data.proxy || "";
     if (found) {
       if (fill) {
@@ -373,11 +309,7 @@ export async function addRule() {
   const need_proxy = $("ruleNeedSelect").value === "1";
   if (!pattern) { setStatus("请填写匹配模式", "err"); return; }
   $("rulePatternInput").value = "";
-  await fetch("/api/proxy-rule", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pattern, need_proxy }),
-  });
+  await apiPost("/api/proxy-rule", { pattern, need_proxy });
   renderProxyPanel();
   loadProxyDomains(); // 模式规则变化 → 刷新侧边栏代理标记
   setStatus(`已添加规则：${pattern} → ${need_proxy ? "用代理" : "直连"}`);

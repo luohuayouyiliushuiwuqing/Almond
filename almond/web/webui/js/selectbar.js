@@ -1,7 +1,8 @@
 /* 多选操作条：勾选的真源是 state.selectedUrls（url 集合），卡片上的复选框只是投影。
    作用域约定：全选 / 反选只作用于**当前可见**记录（getVisibleRecords，跟随搜索与筛选），
    标签 / 重新抓取 / 删除 / 导出作用于**整个选中集合**（与「已选 N 条」一致）。 */
-import { render } from "./board.js";
+import { apiDel } from "./api.js";
+import { emit } from "./bus.js";
 import { backfillState, enqueueBackfill } from "./backfill.js";
 import { doExport } from "./io.js";
 import { openTagBatch } from "./modals.js";
@@ -47,7 +48,7 @@ export function syncSelectBar() {
   $("selInvert").disabled = noVisible;
 }
 
-export function toggleSelect(url, on) {
+function toggleSelect(url, on) {
   if (on) state.selectedUrls.add(url);
   else state.selectedUrls.delete(url);
   paintSelection();
@@ -56,21 +57,21 @@ export function toggleSelect(url, on) {
 
 /* ---------- 选择动作（可见范围） ---------- */
 
-export function selectVisible() {
+function selectVisible() {
   for (const r of getVisibleRecords()) state.selectedUrls.add(r.url);
   paintSelection();
   syncSelectBar();
 }
 
 /* 全不选 = 清空整个集合（含被筛掉的）：留一半会让「已选 N 条」与看到的对不上 */
-export function clearSelection() {
+function clearSelection() {
   state.selectedUrls.clear();
   paintSelection();
   syncSelectBar();
 }
 
 /* 反选只翻**可见**记录的成员关系，筛掉的保持原样 */
-export function invertSelection() {
+function invertSelection() {
   for (const r of getVisibleRecords()) {
     if (state.selectedUrls.has(r.url)) state.selectedUrls.delete(r.url);
     else state.selectedUrls.add(r.url);
@@ -81,7 +82,7 @@ export function invertSelection() {
 
 /* ---------- 批量动作（整个集合） ---------- */
 
-export async function deleteSelected() {
+async function deleteSelected() {
   const urls = [...state.selectedUrls];
   if (!urls.length) return;
   if (!confirm(`确定删除选中的 ${urls.length} 条记录？`)) return;
@@ -104,11 +105,7 @@ export async function deleteSelected() {
     for (let i = 0; i < targets.length; i++) {
       setStatus(`删除中 ${i + 1}/${targets.length}…`, "busy");
       try {
-        const resp = await fetch(
-          "/api/record?url=" + encodeURIComponent(targets[i]),
-          { method: "DELETE" }
-        );
-        const data = await resp.json();
+        const data = await apiDel("/api/record?url=" + encodeURIComponent(targets[i]));
         if (data.ok) {
           state.records = state.records.filter((r) => r.url !== targets[i]);
           state.selectedUrls.delete(targets[i]);
@@ -124,14 +121,14 @@ export async function deleteSelected() {
 
   /* 只 render 一次：逐条 render 会把整板重建 N 次（又闪又慢）。
      setStatus 必须在 render 之后——render 结尾会写「共 N 条…」，会把结果盖掉 */
-  render();
+  emit("render");
   const parts = [`已删除 ${ok} 条`];
   if (fail) parts.push(`失败 ${fail} 条`);
   if (inflight.length) parts.push(`${inflight.length} 条正在抓取，已跳过删除`);
   setStatus(parts.join("，"), fail ? "err" : "");
 }
 
-export function refetchSelected() {
+function refetchSelected() {
   const known = new Set(state.records.map((r) => r.url));
   const urls = [...state.selectedUrls].filter((u) => known.has(u));
   if (!urls.length) return;
@@ -144,7 +141,7 @@ export function refetchSelected() {
   syncSelectBar();
 }
 
-export function exportSelected(format) {
+function exportSelected(format) {
   const known = new Set(state.records.map((r) => r.url));
   const records = [...state.selectedUrls]
     .filter((u) => known.has(u))

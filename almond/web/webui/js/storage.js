@@ -2,12 +2,12 @@
    切换语义（用户定的）：**不迁移，新目录从零开始**——旧数据留在原地；
    切换瞬间：中止在途抓取（服务端存储纪元兜底丢弃结果）、清空补抓队列与
    选择/搜索/筛选/子页等界面状态，然后全量加载新目录并重启补抓扫描。 */
-import { render } from "./board.js";
+import { abortAll, apiDel, apiGet, apiPost } from "./api.js";
+import { emit } from "./bus.js";
 import { resetBackfill, startBackfill } from "./backfill.js";
 import { closeDetail } from "./detail.js";
-import { abortAllFetches } from "./fetch.js";
 import { leaveDomainPage } from "./domain-page.js";
-import { loadDomainConfig, loadProxyDomains, loadRecords } from "./records.js";
+import { loadRecords, reloadAll } from "./records.js";
 import { $, el, setStatus, state } from "./state.js";
 
 /* ---------- 存储目录（数据库、缓存等本地私有数据的统一存放处） ---------- */
@@ -47,9 +47,7 @@ function renderHistory(history) {
       del.title = "从历史中移除这个路径";
       del.addEventListener("click", async () => {
         try {
-          const d = await (
-            await fetch("/api/storage-history?path=" + encodeURIComponent(p), { method: "DELETE" })
-          ).json();
+          const d = await apiDel("/api/storage-history?path=" + encodeURIComponent(p));
           if (d.ok) renderHistory(d.history);
         } catch (e) {
           setStatus("移除历史失败：" + e.message, "err");
@@ -69,7 +67,7 @@ export async function openDbPanel() {
   $("dbPathInput").value = "";
   $("dbCurrent").textContent = "加载中…";
   try {
-    const d = await (await fetch("/api/storage-dir")).json();
+    const d = await apiGet("/api/storage-dir");
     fsState.storage = d.path;
     $("dbCurrent").textContent =
       `目录: ${d.path}\n数据库: ${d.db_path}\n图片缓存: ${d.cache_dir}`;
@@ -94,9 +92,7 @@ export async function loadFs(path) {
   $("fsPath").textContent = path || "（选择盘符 / 根目录）";
   box.innerHTML = '<div class="fs-empty">加载中…</div>';
   try {
-    const d = await (
-      await fetch("/api/fs/list?path=" + encodeURIComponent(path))
-    ).json();
+    const d = await apiGet("/api/fs/list?path=" + encodeURIComponent(path));
     if (!d.ok) {
       box.innerHTML = "";
       box.appendChild(el("div", "fs-empty", d.error || "读取失败"));
@@ -150,7 +146,7 @@ export async function saveDbPath() {
        一分多钟。先中止：连接立刻归还、队列代际作废；服务端的纪元兜底不受影响，
        切换 POST 本身失败时走 recoverSwitch 恢复原样（服务端那时什么都没动）。 */
     setStatus("正在切换存储目录：中止旧任务…", "busy");
-    abortAllFetches();
+    abortAll();
     resetBackfill();
 
     /* ② 旧画面立刻清掉：点击即见变化；旧缩略图的 /api/img 随 DOM 一起被浏览器
@@ -169,18 +165,13 @@ export async function saveDbPath() {
     leaveDomainPage();          // 退出域名子页（在子页里时内部 render 一次）
     state.domainConfig = new Map();    // 旧域名配置绝不带进新目录
     state.proxyDomains = new Set();
-    render();                   // 空看板立刻上屏（不在子页时 leaveDomainPage 不渲染）
+    emit("render");             // 空看板立刻上屏（不在子页时 leaveDomainPage 不渲染）
 
     /* ③ 切库（服务端纪元 +1，旧纪元的抓取结果从此作废） */
     setStatus("正在切换存储目录：提交新目录…", "busy");
     let data;
     try {
-      const resp = await fetch("/api/storage-dir", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path }),
-      });
-      data = await resp.json();
+      data = await apiPost("/api/storage-dir", { path });
     } catch (e) {
       await recoverSwitch(e.message);
       return;
@@ -200,7 +191,7 @@ export async function saveDbPath() {
 
     // ④ 并行加载新目录 + 重启补抓扫描/轮询（三个接口互不依赖，串行要白等三趟往返）
     setStatus("正在切换存储目录：载入新目录…", "busy");
-    await Promise.all([loadRecords(), loadDomainConfig(), loadProxyDomains()]);
+    await reloadAll();
     startBackfill("存储已切换，扫描新目录");
     setStatus(
       `存储目录已切换到 ${data.path}` +

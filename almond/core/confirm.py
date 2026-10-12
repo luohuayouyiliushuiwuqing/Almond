@@ -16,15 +16,17 @@
 """
 from concurrent.futures import ThreadPoolExecutor
 
-from almond.core import fetch_hints, fetchpool, records
+from almond.core import fetch_hints, fetchpool, records, storage
+from almond.core.domains import get_domain_fetch_config, list_domains
+from almond.core.hostutil import root_domain
 from almond.core.log import logger
 
-_TEST_WORKERS = 8      # 与 fetchpool 池、前端补抓并发一致
+_TEST_WORKERS = 8      # 与 fetchpool 子进程池同为 8（前端补抓 5 并发是浏览器侧，不一一对应）
 _TEST_REASON = "直连/代理/JS 多路尝试均未取得数据"
 
 
 def _root(url: str) -> str:
-    return records._root_domain(url) or url
+    return hostutil.root_domain(url) or url
 
 
 def _candidates(domains: list | None = None) -> dict:
@@ -35,7 +37,7 @@ def _candidates(domains: list | None = None) -> dict:
     - 显式传入的 domains 里若没有 pending 网址，也保留该名字（返回空列表 →
       报「无可用测试网址」）。
     """
-    auto = {d["name"]: d.get("auto_fetch") for d in records.list_domains()}
+    auto = {d["name"]: d.get("auto_fetch") for d in list_domains()}
     wanted = set(domains) if domains else None
     by: dict = {}
     for u in records.list_pending_urls():
@@ -73,9 +75,9 @@ def _test_one(domain: str, url: str, proxy_for, start_epoch: int) -> tuple:
     - transient：子进程异常等**不构成「不通』证据**的情况 → 不写结论，下轮再试；
     - aborted：期间切了存储 → 一切作废。
     """
-    rules = records.get_domain_fetch_config(url)
+    rules = get_domain_fetch_config(url)
     proxy = (proxy_for(url) if proxy_for else None) or None
-    job = fetchpool.submit(url=url, proxy=proxy,
+    job = fetchpool.submit(url=url, proxy=proxy, epoch=start_epoch,
                            selector=rules["detail_selector"] or None,
                            cover=rules["cover"])
     try:
@@ -85,7 +87,7 @@ def _test_one(domain: str, url: str, proxy_for, start_epoch: int) -> tuple:
     if got is None:
         return ("aborted", "存储已切换")
     meta, effects = got
-    if records.storage_epoch() != start_epoch:
+    if storage.storage_epoch() != start_epoch:
         return ("aborted", "存储已切换")
     fetch_hints.apply_effects(effects, epoch=start_epoch)
     if meta is None:
@@ -104,7 +106,7 @@ def _test_one(domain: str, url: str, proxy_for, start_epoch: int) -> tuple:
 
 def confirm_domains(domains: list | None = None, proxy_for=None,
                     start_epoch: int | None = None) -> dict:
-    """确认一批域名的抓取方案（并发测试，最多 5 路）。
+    """确认一批域名的抓取方案（并发测试，最多 8 路，与 fetchpool 同池）。
 
     返回 report：{ready, confirmed, failed, skipped, transient, aborted}——
     ready/confirmed 是「有方案、自动抓取放行」；failed/skipped 是「持久结论、
@@ -112,7 +114,7 @@ def confirm_domains(domains: list | None = None, proxy_for=None,
     confirm，前端本轮放弃、之后的轮询再试。
     """
     if start_epoch is None:
-        start_epoch = records.storage_epoch()
+        start_epoch = storage.storage_epoch()
     by = _candidates(domains)
     ready: list = []
     confirmed: list = []

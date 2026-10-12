@@ -1,19 +1,20 @@
 /* 数据层：加载、合并、筛选可见记录、代理域名集合、删除。 */
-import { render } from "./board.js";
-import { $, MIN_GROUP, hostOf, rootDomain, setStatus, state } from "./state.js";
+import { apiDel, apiGet } from "./api.js";
+import { emit } from "./bus.js";
+import { MIN_GROUP, hostOf, rootDomain, setStatus, state } from "./state.js";
 
 /* ---------- 数据加载与渲染 ---------- */
 
 export async function loadRecords() {
   try {
-    const data = await (await fetch("/api/records")).json();
+    const data = await apiGet("/api/records");
     if (data.error) { // 服务端异常（如存储目录不存在）：原样提示
       setStatus("加载失败：" + data.error, "err");
       return;
     }
     state.records = data.records || [];
     if (typeof data.epoch === "number") state.storageEpoch = data.epoch;   // 抓取请求要带的纪元
-    render();
+    emit("render");
     setStatus(`共 ${state.records.length} 条`);
   } catch (e) {
     setStatus("加载失败：" + e.message, "err");
@@ -75,12 +76,12 @@ export function getVisibleRecords() {
 
 export async function loadProxyDomains() {
   try {
-    const data = await (await fetch("/api/proxy-domains")).json();
+    const data = await apiGet("/api/proxy-domains");
     state.proxyDomains = new Set(data.domains || []);
   } catch (e) {
     state.proxyDomains = new Set();
   }
-  render();
+  emit("render");
 }
 
 /* 域名配置缓存（GET /api/domains → state.domainConfig）：
@@ -88,11 +89,16 @@ export async function loadProxyDomains() {
    拿不到就保留上一份——网络抖一下不该让补抓或页面停摆 */
 export async function loadDomainConfig() {
   try {
-    const data = await (await fetch("/api/domains")).json();
+    const data = await apiGet("/api/domains");
     state.domainConfig = new Map((data.domains || []).map((d) => [d.name, d]));
   } catch (e) {
     /* 保持现状 */
   }
+}
+
+/* 改完域名设置/域名重置/切库后的统一三刷（原先 4 处各写各的） */
+export async function reloadAll() {
+  await Promise.all([loadRecords(), loadDomainConfig(), loadProxyDomains()]);
 }
 
 /* ---------- 删除 ---------- */
@@ -101,13 +107,10 @@ export async function removeRecord(record) {
   const label = record.title || record.url;
   if (!confirm(`确定删除「${label}」？`)) return;
   try {
-    const resp = await fetch("/api/record?url=" + encodeURIComponent(record.url), {
-      method: "DELETE",
-    });
-    const data = await resp.json();
+    const data = await apiDel("/api/record?url=" + encodeURIComponent(record.url));
     if (data.ok) {
       state.records = state.records.filter((r) => r.url !== record.url);
-      render();
+      emit("render");
       setStatus(`已删除：${label}`);
     } else {
       setStatus("删除失败：" + data.error, "err");

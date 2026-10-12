@@ -3,7 +3,7 @@
 接口用 Scrapling 抓取指定网址，再按 CSS 选择器提取元素，供试验台展示。
 抓取逻辑复用 almond.core 的 fetcher / fields。
 
-用法：python -m almond.web.demo.server   （默认 http://127.0.0.1:8765/，在仓库根目录执行）
+用法：python -m almond.web.demo.server [--host 127.0.0.1] [--port 8765]   （在仓库根目录执行）
      或安装后直接 almond-demo
 """
 
@@ -123,9 +123,19 @@ class Handler(BaseHTTPRequestHandler):
         logger.debug(f"{self.address_string()} {fmt % args}")
 
 
+def _opt(name: str, default: str) -> str:
+    """取 `--name value` 形式的参数；缺失或没跟值时回退默认值（与 webui 同款）。"""
+    if name not in sys.argv:
+        return default
+    idx = sys.argv.index(name)
+    return sys.argv[idx + 1] if idx + 1 < len(sys.argv) else default
+
+
 def main() -> None:
-    server = ThreadingHTTPServer(("127.0.0.1", 8765), Handler)
-    logger.info("演示服务已启动：http://127.0.0.1:8765/")
+    host = _opt("--host", "127.0.0.1")
+    port = int(_opt("--port", "8765"))
+    server = ThreadingHTTPServer((host, port), Handler)
+    logger.info(f"演示服务已启动：http://{host}:{port}/")
     logger.info("接口：GET /api/fetch?url=<网址>&selector=<CSS选择器>&proxy=<代理，可选>")
     try:
         server.serve_forever()

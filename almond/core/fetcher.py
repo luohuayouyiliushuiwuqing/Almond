@@ -8,43 +8,16 @@ from urllib.parse import urljoin, urlparse
 
 from scrapling.fetchers import DynamicFetcher, Fetcher, StealthyFetcher
 
-from almond.core import fetch_hints
+from almond.core import fetch_hints, hints_cookie, hints_strategy
 from almond.core.fields import extract_fields
+from almond.core.hostutil import is_domestic
 from almond.core.log import logger
+from almond.core.proxy import ensure_working_proxy, proxy_reachable
 
 # 详情区块选择器：抓取成功后顺带解析「标签: 值」字段，无匹配时 details 为空列表
 DETAIL_SELECTOR = ".space-y-2 > *"
 
-# 国内域名后缀（.cn 及其二级后缀）
-_DOMESTIC_SUFFIXES = (".cn", ".com.cn", ".net.cn", ".org.cn")
-# 常见国内域名（不含 .cn 后缀，需显式列出）
-_DOMESTIC_DOMAINS: set[str] = {
-    "baidu.com", "bilibili.com", "zhihu.com", "weibo.com", "douyin.com",
-    "xiaohongshu.com", "taobao.com", "tmall.com", "jd.com", "pinduoduo.com",
-    "qq.com", "weixin.qq.com", "163.com", "126.com", "sina.com", "sohu.com",
-    "csdn.net", "cnblogs.com", "jianshu.com", "juejin.cn",
-    "aliyun.com", "tencent.com", "huawei.com", "xiaomi.com", "mi.com",
-    "xiaomimimo.com", "deepseek.com",
-    "apple.com", "microsoft.com", "google.com.hk",
-    "feishu.cn", "dingtalk.com", "yuque.com",
-    "hdslb.com", "127.net", "netease.com", "kimi.com",
-}
-
-
-def _is_domestic(url: str) -> bool:
-    """判断 URL 是否为国内网站（不走代理）。"""
-    try:
-        host = (urlparse(url).hostname or "").lower()
-    except Exception:
-        return False
-    if any(host.endswith(s) for s in _DOMESTIC_SUFFIXES):
-        return True
-    # 子域名匹配：mimo.mi.com → 检查 mi.com
-    parts = host.split(".")
-    for i in range(len(parts) - 1):
-        if ".".join(parts[i:]) in _DOMESTIC_DOMAINS:
-            return True
-    return False
+# 国内站点判定见 hostutil.is_domestic（原在此处的 _is_domestic 已迁走）
 
 
 # 反爬拦截的常见状态码：常规链拿到它们算「被拦」，才触发扩展策略的定制发现
@@ -137,7 +110,7 @@ def fetch_page(url: str, timeout: int = 20, proxy: str | None = None):
     """
     fetch_hints.enter_fetch()   # 绑定存储纪元：抓取期间切库 → 本函数后续所有缓存写入作废
     host = urlparse(url).hostname
-    if proxy and _is_domestic(url):
+    if proxy and is_domestic(url):
         logger.info(f"国内站点，跳过代理直连：{host}")
         proxy = None
 
@@ -145,12 +118,12 @@ def fetch_page(url: str, timeout: int = 20, proxy: str | None = None):
     # 而不是拿着坏端口往下跑（放最前面，skip_reason 也要按顶替后的地址判定；
     # 顶替动作的日志由 ensure_working_proxy 统一打）
     if proxy:
-        proxy = fetch_hints.ensure_working_proxy(proxy)
+        proxy = ensure_working_proxy(proxy)
     reason = fetch_hints.skip_reason(url, proxy)
     if reason:
         logger.info(f"跳过抓取：{reason}")
         return None
-    if proxy and not fetch_hints.proxy_reachable(proxy):
+    if proxy and not proxy_reachable(proxy):
         logger.warning(f"代理 {proxy} 转发不通（区间内无可用顶替端口），本轮降级直连：{host}")
         proxy = None
 
@@ -158,12 +131,12 @@ def fetch_page(url: str, timeout: int = 20, proxy: str | None = None):
     #        成功即返回（记耗时、会话轮换一并回写），失效/没存则走下面的策略与常规逻辑 ──
     if _fetch_stale(host):
         return None
-    ck = fetch_hints.get_cookie(url)
+    ck = hints_cookie.get_cookie(url)
     if ck:
-        cookies = fetch_hints.parse_cookie_header(ck["value"])
+        cookies = hints_cookie.parse_cookie_header(ck["value"])
         if not cookies:
             logger.warning("已存 Cookie 解析不出键值对，弃用")
-            fetch_hints.drop_cookie(url)
+            hints_cookie.drop_cookie(url)
         else:
             t0 = time.time()
             try:
@@ -177,14 +150,14 @@ def fetch_page(url: str, timeout: int = 20, proxy: str | None = None):
                 ms = round((time.time() - t0) * 1000)
                 st = getattr(response, "status", None)
                 if response is not None and (st is None or st < 400):
-                    fetch_hints.touch_cookie(url, ms, response)   # 刷新时间/记耗时/轮换合并
+                    hints_cookie.touch_cookie(url, ms, response)   # 刷新时间/记耗时/轮换合并
                     if proxy:
                         fetch_hints.record_proxy_success(url)
                     else:
                         fetch_hints.record_direct_success(url)
                     logger.info(f"Cookie 直取成功：{urlparse(url).hostname}（{ms}ms）")
                     return response
-                fetch_hints.drop_cookie(url)
+                hints_cookie.drop_cookie(url)
                 logger.warning(f"Cookie 已失效（HTTP {st}），弃用 → 回退策略/常规链")
 
     # ── 1) 策略优先：先用成绩册里**最快**的打法；挂了顺位第二快，单轮最多试 3 套 ──
@@ -192,14 +165,14 @@ def fetch_page(url: str, timeout: int = 20, proxy: str | None = None):
     for _ in range(3):
         if _fetch_stale(host):
             return None
-        strat = fetch_hints.get_strategy(url)
+        strat = hints_strategy.get_strategy(url)
         if not strat or strat["id"] in tried:
             break
         sid = strat["id"]
         tried.add(sid)
-        if fetch_hints.strategy_stale(url):
+        if hints_strategy.strategy_stale(url):
             logger.info(f"策略 {sid}（历史最快 {strat.get('best_ms')}ms）距上次成功已超过 "
-                        f"{fetch_hints.STRATEGY_STALE_DAYS} 天，强制复验…")
+                        f"{hints_strategy.STRATEGY_STALE_DAYS} 天，强制复验…")
         t0 = time.time()
         try:
             response = _exec_strategy(url, sid, timeout, proxy)
@@ -208,20 +181,20 @@ def fetch_page(url: str, timeout: int = 20, proxy: str | None = None):
             break                       # 路由缺失是环境问题：不弃用，交给常规链兜路由
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"策略 {sid} 执行失败（{type(exc).__name__}: {exc}），弃用并顺位下一套")
-            fetch_hints.drop_strategy(url, sid)
+            hints_strategy.drop_strategy(url, sid)
             continue
         ms = round((time.time() - t0) * 1000)
         st = getattr(response, "status", None)
         if response is not None and (st is None or st < 400):
-            fetch_hints.save_strategy(url, sid, ms)   # 记成绩、刷新时间、最快者当选
+            hints_strategy.save_strategy(url, sid, ms)   # 记成绩、刷新时间、最快者当选
             if sid.startswith("proxy|"):
                 fetch_hints.record_proxy_success(url)
             else:
                 fetch_hints.record_direct_success(url)
-            fetch_hints.store_cookie_from_response(url, response)   # 任意成功都顺手收 Cookie
+            hints_cookie.store_cookie_from_response(url, response)   # 任意成功都顺手收 Cookie
             return response
         logger.warning(f"策略 {sid} 返回 HTTP {st}（{ms}ms），弃用并顺位下一套")
-        fetch_hints.drop_strategy(url, sid)
+        hints_strategy.drop_strategy(url, sid)
 
     # ── 2) 常规三级链（代理组合优先，按配置回退直连） ──
     engines = (
@@ -262,8 +235,8 @@ def fetch_page(url: str, timeout: int = 20, proxy: str | None = None):
             blocked_status = status
         if response is not None and (status is None or status < 400):
             # 成功 → 这套配方连耗时进成绩册（比当前最快才夺位，慢的当备胎）
-            fetch_hints.save_strategy(url, _sid("proxy" if p else "direct", ename), ms)
-            fetch_hints.store_cookie_from_response(url, response)   # 任意成功都顺手收 Cookie
+            hints_strategy.save_strategy(url, _sid("proxy" if p else "direct", ename), ms)
+            hints_cookie.store_cookie_from_response(url, response)   # 任意成功都顺手收 Cookie
             return response
         logger.debug(f"抓取返回 HTTP {status}，尝试下一抓取器…")
 
@@ -284,12 +257,12 @@ def fetch_page(url: str, timeout: int = 20, proxy: str | None = None):
             ms = round((time.time() - t0) * 1000)
             st = getattr(response, "status", None)
             if response is not None and (st is None or st < 400):
-                fetch_hints.save_strategy(url, sid, ms)
+                hints_strategy.save_strategy(url, sid, ms)
                 if route == "proxy":
                     fetch_hints.record_proxy_success(url)
                 else:
                     fetch_hints.record_direct_success(url)
-                fetch_hints.store_cookie_from_response(url, response)
+                hints_cookie.store_cookie_from_response(url, response)
                 logger.info(f"已定制可行策略：{sid}（{ms}ms，下次直接用）")
                 return response
             logger.debug(f"候选 {sid} → HTTP {st}")

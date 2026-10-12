@@ -83,29 +83,11 @@
     </div>
   </div>
 
-  <!-- 域名管理弹窗 -->
+  <!-- 域名管理弹窗（表单由 domain-settings.js 动态挂载，两个入口共用一份实现） -->
   <div id="domainMask" class="modal-mask" hidden>
     <div class="modal">
       <div class="modal-title" id="domainTitle">域名管理</div>
-      <div class="domain-form">
-        <label>显示别名</label>
-        <input id="domainNameInput" class="input" placeholder="如：深度求索" spellcheck="false">
-        <label>是否需要代理</label>
-        <select id="domainNeedSelect" class="input">
-          <option value="">跟随全局</option>
-          <option value="1">用代理</option>
-          <option value="0">直连</option>
-        </select>
-      </div>
-      <div class="domain-reset">
-        <label>域名重置（原域名挂了就换到新域名）</label>
-        <div class="proxy-row">
-          <input id="domainResetInput" class="input" placeholder="新域名，如 example.com" spellcheck="false">
-          <button id="domainResetBtn" class="btn-ghost">替换</button>
-        </div>
-        <div class="proxy-hint">把 <code id="domainResetOld"></code>（含其子域名）的记录链接、封面、
-          详情链接、域名规则与代理规则整体改写为新域名，不可撤销。</div>
-      </div>
+      <div id="domainFormHost"></div>
       <div class="modal-actions">
         <button id="domainCancel" class="btn-ghost">取消</button>
         <button id="domainSave" class="btn-primary">保存</button>

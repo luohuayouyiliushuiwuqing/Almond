@@ -21,12 +21,12 @@ import os
 import queue
 import threading
 
-from almond.core import fetch_hints, records
+from almond.core import fetch_hints, storage
 from almond.core.fetcher import get_metadata
 from almond.core.log import logger
 
 _CTX = mp.get_context("spawn")     # 统一 spawn：Windows 必须，POSIX 上避 fork+线程
-_WORKERS = 8                        # 与前端补抓 5 并发一一对应
+_WORKERS = 8                        # 抓取子进程池 8 个；前端补抓 5 并发是浏览器侧并发，两者不是一一对应
 _WAIT_TIMEOUT = 400.0              # 单任务看门狗：正常超时链远短于此，防子进程挂死
 
 # 「一代」= 一对 mp.Queue + 一个读线程 + 本代子进程。
@@ -164,7 +164,10 @@ def _reader(gen: dict) -> None:
             return
         job_id, meta, effects = item
         with _lock:
-            jq = _jobs.pop(job_id, None)
+            # 只取不 pop——消费（pop）由 peek/wait 的收口路径做。
+            # 若在这里 pop，结果会塞进一个随即无人引用的队列：peek 之后再查
+            # _jobs 已空，永远只能报「硬停作废」（异步轮询路全灭）。
+            jq = _jobs.get(job_id)
         if jq is not None:
             jq.put((meta, effects))
 
@@ -258,12 +261,6 @@ def peek(job_id: int) -> dict:
     return {"done": True, "result": item, "epoch": epoch}
 
 
-def get_job_epoch(job_id: int) -> int:
-    """查询任务的提交纪元（供 /api/fetch/status 做 stale 判定）。"""
-    with _lock:
-        return _job_epochs.get(job_id, 0)
-
-
 def cancel_all() -> None:
     """硬停全部抓取子进程（切库监听调用）：在等的任务立刻收到 None。
 
@@ -310,4 +307,4 @@ def cancel_all() -> None:
         logger.info(f"存储切换：已硬停 {killed} 个抓取子进程（含其浏览器进程树）")
 
 
-records.on_storage_changed(cancel_all)
+storage.on_storage_changed(cancel_all)
