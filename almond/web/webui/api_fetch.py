@@ -129,6 +129,9 @@ def confirm_stage(h, qs: dict, body: dict) -> None:
 
     没有可用方案的域名，各挑一条真实网址跑一次测试抓取，成功学出方案、
     失败写持久结论——前端据此整组放行/跳过。
+
+    `force: true`（代理面板「刷新」按钮）：显式重测——绕过「结论已定不再尝试」，
+    且对没有待抓网址的域名用根网址做只读探测（不落库）。自动路径不传。
     """
     domains = body.get("domains")
     if domains is not None and not isinstance(domains, list):
@@ -145,6 +148,7 @@ def confirm_stage(h, qs: dict, body: dict) -> None:
         domains=domains,
         proxy_for=lambda u: resolve_proxy(u, gp),
         start_epoch=start_epoch,
+        force=bool(body.get("force")),
     )
     if report.get("aborted") or storage_epoch() != start_epoch:
         send_json(h, {"ok": True, "stale": True,

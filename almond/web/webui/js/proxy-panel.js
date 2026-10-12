@@ -221,7 +221,12 @@ export async function refreshDomainTests() {
 
   setStatus(`正在重新确认 ${todo.length} 个域名的抓取方案…`, "busy");
   try {
-    const result = await apiPost("/api/confirm", { domains: todo, proxy: state.globalProxy });
+    /* force: 显式重测——绕过服务端「结论已定不再尝试」（自动路径的防浪费规则），
+       并对没有待抓网址的域名用根网址做只读探测（不落库）。没有它，「刷新」对
+       无方案/未测试且无 pending 记录的域名永远 silently 跳过。 */
+    const result = await apiPost("/api/confirm", {
+      domains: todo, proxy: state.globalProxy, force: true,
+    });
     if (result.stale) { setStatus("存储已切换，刷新作废"); return; }
     // 刷新面板
     await loadDomainConfig();
@@ -231,6 +236,12 @@ export async function refreshDomainTests() {
     if ((result.ready || []).length) parts.push(`已有方案 ${result.ready.length} 个`);
     if ((result.failed || []).length) parts.push(`无方案 ${result.failed.length} 个`);
     if ((result.transient || []).length) parts.push(`临时失败 ${result.transient.length} 个`);
+    /* skipped 必须可见：否则「刷新完成」四个字会把「一个都没测」伪装成成功 */
+    const skipped = result.skipped || [];
+    if (skipped.length) {
+      const shown = skipped.slice(0, 3).map((s) => `${s.domain}：${s.reason}`).join("；");
+      parts.push(`跳过 ${skipped.length} 个（${shown}${skipped.length > 3 ? " 等" : ""}）`);
+    }
     setStatus(parts.length ? `刷新完成：${parts.join("，")}` : "刷新完成");
   } catch (e) {
     setStatus("刷新失败：" + e.message, "err");
@@ -278,6 +289,25 @@ export async function saveGlobalProxy() {
       ? `全局代理已设为 ${val}（自下一条抓取起生效）`
       : "已清除全局代理，改走直连（自动探测不再覆盖，自下一条抓取起生效）"
   );
+}
+
+/* 服务端后台线程每 30s 重探一次本机代理端口（core/proxy.py.start_proxy_refresh）。
+   这里被动跟随：只在结论变化、且用户没手填过代理（proxyManual）时才采纳——
+   与 detectProxy({fill:true}) 同语义，但自己不发起探测，轮询只读缓存接口。
+   服务端没探到（返回空）时不动作：与 detectProxy 一致，不清空用户现有地址。 */
+export function startProxyPoll() {
+  setInterval(async () => {
+    try {
+      const data = await apiGet("/api/proxy-current");
+      const found = data.proxy || "";
+      if (found && found !== state.globalProxy && !state.proxyManual) {
+        state.globalProxy = found;
+        const input = $("globalProxyInput");
+        if (input) input.value = found;
+        setStatus(`代理已自动更新为 ${found}`);
+      }
+    } catch { /* 轮询失败不打扰用户：下一轮再来 */ }
+  }, 30000);
 }
 
 /* 自动探测本地代理端口（7889-7899）；detectOnly 时只返回不写状态 */

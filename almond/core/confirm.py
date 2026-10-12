@@ -13,6 +13,12 @@
 产出即「系统实测的映射关系与抓取方案」：结论写进 fetch_hints（经 `/api/domains`
 的 `tested.{plan, strategy, confirm}` 暴露给前端），前端 `autoFetchEligible`
 据此放行/整组跳过。
+
+**显式重测（`force=True`，「刷新」按钮）与自动路径的差异**：自动路径守规则 3/4
+（失败不再重试、结论已定不再尝试）——那是防浪费；用户手点「刷新」是显式意志，
+两条规则都不适用：绕过结论直接重测，且对没有任何待抓网址的域名（记录都抓过 /
+被删光）用**域名根网址** `https://<域名>/` 做只读探测——结论照写（效应 + confirm），
+但**不 upsert**：根网址不是用户收藏的链接，不能凭空写进看板。
 """
 from concurrent.futures import ThreadPoolExecutor
 
@@ -26,16 +32,18 @@ _TEST_REASON = "直连/代理/JS 多路尝试均未取得数据"
 
 
 def _root(url: str) -> str:
-    return hostutil.root_domain(url) or url
+    return root_domain(url) or url
 
 
-def _candidates(domains: list | None = None) -> dict:
-    """待确认域名 → pending 网址列表（插入顺序）。
+def _candidates(domains: list | None = None) -> tuple[dict, set]:
+    """待确认域名 → 待测网址列表（插入顺序）；第二返回值 = 根网址探测域名集。
 
     - 只看 `fetched=0` 的记录（确认阶段就是为自动抓取服务的）；
-    - `auto_fetch=0` 的域名不参与（用户已明确关掉自动抓取，也就不该为它发测试请求）；
-    - 显式传入的 domains 里若没有 pending 网址，也保留该名字（返回空列表 →
-      报「无可用测试网址」）。
+    - `auto_fetch=0` 的域名不参与 pending 扫描（用户已明确关掉自动抓取）；
+    - 显式传入的 domains（「刷新」按钮）若没有 pending 网址，也保留该名字，并用
+      **域名根网址** `https://<域名>/` 做只读探测（计入探测集，`_test_one` 据此
+      跳过 upsert）——记录都抓过或被删光时，「重新确认」不该 silently 跳过；
+      手点刷新即显式同意为该域名发这一次测试请求，`auto_fetch=0` 不再拦。
     """
     auto = {d["name"]: d.get("auto_fetch") for d in list_domains()}
     wanted = set(domains) if domains else None
@@ -47,18 +55,27 @@ def _candidates(domains: list | None = None) -> dict:
         if wanted is not None and d not in wanted:
             continue
         by.setdefault(d, []).append(u)
+    probes: set = set()
     if wanted:
         for d in wanted:
             by.setdefault(d, [])
-    return by
+            if not by[d]:
+                by[d].append(f"https://{d}/")
+                probes.add(d)
+    return by, probes
 
 
-def _decide(domain: str, urls: list) -> tuple:
-    """该域名现在该走哪条路：(action, payload)。"""
+def _decide(domain: str, urls: list, force: bool = False) -> tuple:
+    """该域名现在该走哪条路：(action, payload)。
+
+    `force=True`（「刷新」按钮的显式重测）绕过「结论已定不再尝试」——规则 4 是
+    自动路径的防浪费机制，不该管住用户手动点下的刷新；已有方案的仍走 ready
+    （重测一遍纯属浪费请求）。
+    """
     if fetch_hints.domain_plan(domain):
         return ("ready", None)                      # 已有方案 → 直接放行
     confirm = fetch_hints.get_confirm(domain)
-    if confirm is not None:
+    if confirm is not None and not force:
         reason = "已确认无可用方案" if not confirm.get("ok") else "确认过但当前无方案"
         return ("skipped", reason)                  # 结论已定 → 不再尝试
     if not urls:
@@ -66,14 +83,19 @@ def _decide(domain: str, urls: list) -> tuple:
     return ("test", urls[0])
 
 
-def _test_one(domain: str, url: str, proxy_for, start_epoch: int) -> tuple:
+def _test_one(domain: str, url: str, proxy_for, start_epoch: int,
+              probe: bool = False) -> tuple:
     """对单个域名的真实网址跑一次完整测试抓取（fetchpool 子进程）。
 
     返回 (status, info)：status ∈ confirmed / failed / transient / aborted。
     - confirmed：拿到数据 → 方案（策略/Cookie）由效应通道落地，confirm(ok=True)；
     - failed：明确不通 → confirm(ok=False) 持久记录，整组跳过；
-    - transient：子进程异常等**不构成「不通』证据**的情况 → 不写结论，下轮再试；
+    - transient：子进程异常等**不构成「不通」证据**的情况 → 不写结论，下轮再试；
     - aborted：期间切了存储 → 一切作废。
+
+    `probe=True`：根网址只读探测（域名没有待抓记录时「刷新」按钮的兜底）——
+    结论照写（效应 + confirm），但**不 upsert**：synthesized 的根网址不是用户
+    收藏的链接，不能凭空写进看板。
     """
     rules = get_domain_fetch_config(url)
     proxy = (proxy_for(url) if proxy_for else None) or None
@@ -93,7 +115,7 @@ def _test_one(domain: str, url: str, proxy_for, start_epoch: int) -> tuple:
     if meta is None:
         return ("transient", "抓取子进程异常")
     ok = bool(meta.get("success"))
-    if records.upsert_record_if_epoch(meta, start_epoch) is None:
+    if not probe and records.upsert_record_if_epoch(meta, start_epoch) is None:
         return ("aborted", "存储已切换")
     if ok:
         fetch_hints.confirm_domain(url, True)
@@ -105,17 +127,20 @@ def _test_one(domain: str, url: str, proxy_for, start_epoch: int) -> tuple:
 
 
 def confirm_domains(domains: list | None = None, proxy_for=None,
-                    start_epoch: int | None = None) -> dict:
+                    start_epoch: int | None = None, force: bool = False) -> dict:
     """确认一批域名的抓取方案（并发测试，最多 8 路，与 fetchpool 同池）。
 
     返回 report：{ready, confirmed, failed, skipped, transient, aborted}——
     ready/confirmed 是「有方案、自动抓取放行」；failed/skipped 是「持久结论、
     整组跳过」；transient 是**不构成结论**的意外（超时/子进程异常）——不写
     confirm，前端本轮放弃、之后的轮询再试。
+
+    `force=True`（「刷新」按钮）：绕过「结论已定不再尝试」，且对没有待抓网址的
+    域名改用根网址只读探测；自动路径（backfill 调用）不传 force，语义不变。
     """
     if start_epoch is None:
         start_epoch = storage.storage_epoch()
-    by = _candidates(domains)
+    by, probes = _candidates(domains)
     ready: list = []
     confirmed: list = []
     failed: list = []
@@ -125,7 +150,7 @@ def confirm_domains(domains: list | None = None, proxy_for=None,
 
     tests: list = []
     for d in sorted(by):
-        action, payload = _decide(d, by[d])
+        action, payload = _decide(d, by[d], force)
         if action == "ready":
             ready.append(d)
         elif action == "skipped":
@@ -136,7 +161,7 @@ def confirm_domains(domains: list | None = None, proxy_for=None,
     if tests:
         with ThreadPoolExecutor(max_workers=min(_TEST_WORKERS, len(tests))) as pool:
             results = list(pool.map(
-                lambda t: _test_one(t[0], t[1], proxy_for, start_epoch), tests
+                lambda t: _test_one(t[0], t[1], proxy_for, start_epoch, t[0] in probes), tests
             ))
         for (d, _url), (status, info) in zip(tests, results):
             if status == "confirmed":

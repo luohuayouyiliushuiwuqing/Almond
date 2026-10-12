@@ -11,7 +11,7 @@ import { applyPrefsTag, leaveDomainPage, syncDomainRoute } from "./domain-page.j
 import { addUrl, fetchRecord } from "./fetch.js";
 import { doExport, importFromFile } from "./io.js";
 import { addNewTag, submitRename } from "./modals.js";
-import { addDomainRule, addRule, detectProxy, openProxyPanel, refreshDomainTests, saveDomain, saveGlobalProxy } from "./proxy-panel.js";
+import { addDomainRule, addRule, detectProxy, openProxyPanel, refreshDomainTests, saveDomain, saveGlobalProxy, startProxyPoll } from "./proxy-panel.js";
 import { getVisibleRecords, loadDomainConfig, loadProxyDomains, loadRecords } from "./records.js";
 import { initSelectBar } from "./selectbar.js";
 import { buildSidebar } from "./sidebar.js";
@@ -197,6 +197,9 @@ function init() {
       if (state.domainPage || state.selectedTag !== before) render();
       startBackfill();
     });
+  /* 被动跟随服务端的代理定时刷新（每 30s 读一次 /api/proxy-current 缓存）：
+     不参与上面的加载链——它只消费结论，早一轮晚一轮无所谓 */
+  startProxyPoll();
 }
 
 /* 有没有弹窗开着（detailMask 单独处理，Esc 的第一优先级） */

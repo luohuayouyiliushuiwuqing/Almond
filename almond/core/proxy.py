@@ -171,6 +171,63 @@ def ensure_working_proxy(proxy: str | None) -> str | None:
     return out
 
 
+# ---------------------------------------------------------------- 定时刷新
+
+REFRESH_INTERVAL = 30           # 后台线程重探本机代理端口的间隔（秒）
+_CURRENT: dict | None = None    # 最近一次探测结论：{"proxy": str | None, "at": float}
+
+
+def current_proxy() -> str | None:
+    """后台线程最近一次探到的可用代理（None = 区间内没有 / 还没探过）。
+
+    只读内存结论、**不做任何网络探测**——供轮询类调用方（GET /api/proxy-current）
+    廉价跟随；要主动探测请走 `detect_working_proxy()`。
+    """
+    with _LOCK:
+        cur = _CURRENT
+    return cur["proxy"] if cur else None
+
+
+def refresh_proxy() -> str | None:
+    """重探一次本机代理端口，更新「当前代理」结论；结论变化时打一条 info。
+
+    探测本体就是 `detect_working_proxy()`（含转发验证，结论顺带写进 `_HEALTH`），
+    与启动时的一次性探测完全同一条路径。首轮必记日志（接原先启动日志的位置），
+    之后**只在结论变化时记**——每 30s 一轮，不变化不打，避免日志刷屏。
+    """
+    global _CURRENT
+    found = detect_working_proxy()
+    with _LOCK:
+        first = _CURRENT is None
+        prev = _CURRENT["proxy"] if _CURRENT else None
+        _CURRENT = {"proxy": found, "at": time.time()}
+    if first:
+        logger.info(f"代理探测（7889-7899）：{found or '未发现本地代理'}")
+    elif found != prev:
+        logger.info(f"本机代理已自动更新：{prev or '无'} → {found or '未发现'}")
+    return found
+
+
+def start_proxy_refresh(interval: int = REFRESH_INTERVAL) -> threading.Thread:
+    """启动后台守护线程：每 `interval` 秒重探一次本机代理端口（首轮立即执行）。
+
+    线程只更新内存结论与日志，不写库、不改任何配置；没探到可用端口同样记账，
+    下一轮再试（「尝试更新」——失败不是终点）。daemon=True：随主进程退出。
+    只在服务启动入口调用；子进程（fetchpool spawn）不会重入，无双开风险。
+    """
+    def _loop() -> None:
+        while True:
+            try:
+                refresh_proxy()
+            except Exception:               # noqa: BLE001 — 定时任务不许死
+                logger.exception("代理定时刷新出错，下轮重试")
+            time.sleep(interval)
+
+    t = threading.Thread(target=_loop, name="proxy-refresh", daemon=True)
+    t.start()
+    return t
+
+
 # ---------------------------------------------------------------- 规则匹配
 
 def _pattern_matches(pattern: str, host: str, path: str) -> bool:

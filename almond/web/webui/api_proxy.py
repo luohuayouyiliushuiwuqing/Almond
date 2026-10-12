@@ -1,6 +1,6 @@
 """/api/proxy-* —— 代理规则 CRUD、侧栏徽标、本机端口探测。"""
 
-from almond.core.proxy import detect_working_proxy, list_proxy_domains
+from almond.core.proxy import current_proxy, detect_working_proxy, list_proxy_domains
 from almond.core.records import delete_proxy_rule, list_proxy_rules, upsert_proxy_rule
 from almond.web.webui.api_util import send_json
 
@@ -39,10 +39,20 @@ def detect(h, qs: dict, body: dict) -> None:
     send_json(h, {"ok": True, "proxy": detect_working_proxy()})
 
 
+def current(h, qs: dict, body: dict) -> None:
+    """GET /api/proxy-current：后台定时线程最近一次探测结论。
+
+    只读 `current_proxy()` 内存缓存、**不发起探测**——给前端 30s 轮询做被动跟随；
+    要主动探测（点「检测」按钮）走 /api/proxy-detect。
+    """
+    send_json(h, {"proxy": current_proxy()})
+
+
 ROUTES = {
     ("GET", "/api/proxy-rules"): rules,
     ("POST", "/api/proxy-rule"): upsert_rule,
     ("DELETE", "/api/proxy-rule"): remove_rule,
     ("GET", "/api/proxy-domains"): proxied_domains,
     ("POST", "/api/proxy-detect"): detect,
+    ("GET", "/api/proxy-current"): current,
 }

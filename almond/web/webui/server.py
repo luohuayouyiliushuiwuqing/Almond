@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from almond.core.log import logger
-from almond.core.proxy import detect_working_proxy
+from almond.core.proxy import REFRESH_INTERVAL, start_proxy_refresh
 from almond.web.webui import api_fetch, api_records, api_domains, api_proxy, api_storage
 from almond.web.webui import staticfiles
 from almond.web.webui.api_util import read_json, send_json
@@ -99,9 +99,11 @@ def main() -> None:
     if host == "0.0.0.0":
         logger.info(f"本机访问：http://127.0.0.1:{port}/")
         logger.info("已监听所有网卡且无鉴权；仅本机使用请加 --host 127.0.0.1")
-    # 自动探测本地代理端口（7889-7899），只做提示，不改变任何配置
-    found = detect_working_proxy()
-    logger.info(f"代理探测（7889-7899）：{found or '未发现本地代理'}")
+    # 后台线程每 30s 重探一次本机代理端口（7889-7899），保持「当前代理」新鲜：
+    # 代理客户端换端口重启后无需人工干预，结论变化时记日志；首轮立即执行，
+    # 打的就是原先启动时那行「代理探测（7889-7899）：…」
+    start_proxy_refresh()
+    logger.info(f"代理自动刷新已启动：每 {REFRESH_INTERVAL}s 重探 7889-7899")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
