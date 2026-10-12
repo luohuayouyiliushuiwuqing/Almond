@@ -458,8 +458,8 @@ main {
   font-family: ui-monospace, monospace;
 }
 
-/* 代理映射面板 */
-.proxy-panel { width: min(680px, calc(100vw - 48px)); }
+/* 代理映射面板（与下方 .proxy-panel 布局块同值；真正生效的是靠源顺序覆盖 .modal 的那条） */
+.proxy-panel { width: min(900px, calc(100vw - 72px)); }
 .proxy-section { margin-bottom: 16px; }
 .proxy-section > label {
   display: block;
@@ -711,20 +711,39 @@ main {
 }
 
 /* ---------- 代理面板：左小扇区=系统实测，右大扇区=用户配置 ----------
-   放在 .modal 块之后：靠同特异性 + 源顺序覆盖 .modal 的 width:440px。 */
+   放在 .modal 块之后：靠同特异性 + 源顺序覆盖 .modal 的 width:440px。
+   规整长方形：加宽到 900px、圆角收到 8px、左右留足距离（面板外 72px / 内 28px）；
+   面板是 flex 纵向盒（标题 / 主体 / 操作条），两栏 stretch 等高成并列卡片，各自内部滚动。 */
 .proxy-panel {
-  width: min(680px, calc(100vw - 48px));
-  max-height: calc(100vh - 56px);
-  overflow-y: auto;
+  width: min(900px, calc(100vw - 72px));
+  max-height: calc(100vh - 64px);
+  border-radius: 8px;
+  padding: 22px 28px 18px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;   /* 圆角裁边；滚动交给两栏内部，面板自身不滚 */
 }
 .proxy-body {
   display: grid;
-  grid-template-columns: 216px 1fr;   /* 左小右大 */
-  gap: 16px;
-  align-items: start;
+  grid-template-columns: 264px 1fr;   /* 左小右大 */
+  gap: 22px;
+  align-items: stretch;               /* 两栏等高 → 长方形轮廓 */
+  flex: 1;
+  min-height: 0;
 }
-@media (max-width: 700px) {
+@media (max-width: 760px) {
   .proxy-body { grid-template-columns: 1fr; }
+}
+/* 两栏都是满高卡片：边框 + 圆角，左右留足内边距 */
+.proxy-side,
+.proxy-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 14px 16px;
 }
 .proxy-col-title {
   display: flex; align-items: center; justify-content: space-between;
@@ -742,15 +761,20 @@ main {
 }
 .test-refresh-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .test-refresh-btn:disabled { opacity: .4; cursor: default; }
-/* 左扇区：实测列表独立滚动（域名可能上百个） */
+/* 左扇区：实测列表撑满卡片剩余高度并独立滚动（域名可能上百个） */
 .test-list {
+  flex: 1 1 auto;
+  min-height: 0;
   max-height: min(460px, 52vh);
   overflow-y: auto;
 }
+/* 左栏底部说明贴住卡片下沿（列表上方的剩余空间由 margin-top:auto 吸收） */
+.proxy-side .proxy-hint { margin-top: auto; padding-top: 10px; }
 .test-row { cursor: pointer; }
 .test-row:hover { border-color: var(--accent); background: var(--accent-weak); }
 .proxy-side .rule-pattern { min-width: 0; flex: 1; }
-/* 右扇区：域名路由列表限高 */
+/* 右扇区：域名路由列表限高；整栏内容超高时右卡片自己滚 */
+.proxy-main { overflow: auto; }
 .proxy-scroll { max-height: 250px; overflow-y: auto; }
 #domainRuleList .rule-pattern { min-width: 0; flex: 1; }
 /* 域名路由行内的路由下拉：固定宽度（覆盖 .modal .input 的 100%） */
@@ -768,6 +792,29 @@ main {
 .test-badge.warn { background: #fff5e6; color: #d97706; }
 .test-badge.none { background: var(--bg); color: var(--faint); font-weight: 500; }
 .test-badge.bad { background: #fdecec; color: #dc2626; }   /* 无方案 / 方案失效：自动抓取整组跳过 */
+
+/* 行尾「单域名重试」小圆圈：规则不许用户自定，但允许对某一个链接单独重试它的抓取方案 */
+.test-retry-btn {
+  flex: none;
+  width: 20px; height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--faint);
+  font-size: 12px; line-height: 1;
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.test-retry-btn:hover:not(:disabled) {
+  border-color: var(--accent); color: var(--accent); background: var(--accent-weak);
+}
+.test-retry-btn:disabled { cursor: default; }
+.test-retry-btn.busy { border-color: var(--accent); color: var(--accent); }
+.test-retry-btn .retry-glyph { display: inline-block; }
+.test-retry-btn.busy .retry-glyph { animation: test-retry-spin .7s linear infinite; }
+@keyframes test-retry-spin { to { transform: rotate(360deg); } }
 
 /* ---------- 详情弹层 ---------- */
 .detail-modal { width: min(640px, calc(100vw - 48px)); max-height: 82vh; overflow: auto; }

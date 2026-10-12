@@ -178,6 +178,18 @@ async function renderProxyPanel() {
       const badge = el("span", `test-badge ${v.cls}`, v.text);
       badge.title = v.title;
       row.appendChild(badge);
+
+      /* 行尾小圆圈：单独重测这一个域名的抓取方案（规则仍不许手改，见 retryOneDomain） */
+      const retry = el("button", "test-retry-btn");
+      retry.type = "button";
+      retry.title = `重测 ${d.name} 的抓取方案（直连/代理）`;
+      retry.setAttribute("aria-label", retry.title);
+      retry.appendChild(el("span", "retry-glyph", "↻"));
+      retry.addEventListener("click", (ev) => {
+        ev.stopPropagation();   // 别触发整行的进子页跳转
+        retryOneDomain(d.name, retry);
+      });
+      row.appendChild(retry);
       dTestBox.appendChild(row);
     }
     if (!all.length) dTestBox.appendChild(el("div", "rule-empty", "还没有任何域名"));
@@ -252,6 +264,53 @@ export async function refreshDomainTests() {
     btn.textContent = "刷新";
     // 重启补抓：若之前没暂停，重新扫一遍待抓记录并启动轮询；
     // 若之前已暂停，startBackfill 读 localStorage 的暂停位会正确保持暂停
+    startBackfill();
+  }
+}
+
+/* 单域名重测：规则不许用户自定，但允许对某一个链接单独重试它的抓取方案。
+   与批量刷新同一条链（POST /api/confirm + force 显式重测），只是 domains 只有一个；
+   同样先暂停补抓让出子进程池（确认与补抓共用 fetchpool），跑完恢复补抓。 */
+async function retryOneDomain(name, btn) {
+  if (btn.dataset.busy === "1") return;   // 防连点
+  const restore = () => {
+    btn.disabled = false;
+    btn.classList.remove("busy");
+    delete btn.dataset.busy;
+    btn.title = `重测 ${name} 的抓取方案（直连/代理）`;
+  };
+  btn.dataset.busy = "1";
+  btn.disabled = true;
+  btn.classList.add("busy");
+  btn.title = `正在重测 ${name}…`;
+  setStatus(`正在重新确认 ${name} 的抓取方案…`, "busy");
+
+  const wasPaused = backfillState.paused;
+  backfillState.paused = true;   // 仅内存态：不写 localStorage，恢复时按原值还原
+  abortAll();                    // 中止在途补抓轮询，把子进程池让给确认
+  try {
+    /* force: 显式重测——绕过服务端「结论已定不再尝试」，没有 pending 记录的域名
+       也用根网址做只读探测（不落库）。 */
+    const result = await apiPost("/api/confirm", {
+      domains: [name], proxy: state.globalProxy, force: true,
+    });
+    if (result.stale) { setStatus("存储已切换，重测作废"); restore(); return; }
+    await loadDomainConfig();
+    await renderProxyPanel();    // 重建面板：徽标/圆圈随之更新（旧 btn 已离树，无需 restore）
+    const parts = [];
+    if ((result.confirmed || []).length) parts.push(`新确认 ${result.confirmed.length} 个`);
+    if ((result.ready || []).length) parts.push(`已有方案 ${result.ready.length} 个`);
+    if ((result.failed || []).length) parts.push(`无方案 ${result.failed.length} 个`);
+    if ((result.transient || []).length) parts.push(`临时失败 ${result.transient.length} 个`);
+    /* skipped 必须可见：否则「重测完成」会把「根本没测」伪装成成功 */
+    const skipped = result.skipped || [];
+    if (skipped.length) parts.push(`跳过（${skipped[0].domain}：${skipped[0].reason}）`);
+    setStatus(`${name} 重测完成：${parts.join("，") || "无变化"}`);
+  } catch (e) {
+    setStatus(`重测 ${name} 失败：` + e.message, "err");
+    restore();   // 失败没重建面板，手动恢复按钮
+  } finally {
+    backfillState.paused = wasPaused;
     startBackfill();
   }
 }
