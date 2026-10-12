@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from almond.core import confirm, fetch_hints, fetchpool
 from almond.core.domains import get_domain_fetch_config
 from almond.core.log import logger
-from almond.core.proxy import ensure_working_proxy, resolve_proxy
+from almond.core.proxy import ensure_working_proxy, forced_route, resolve_proxy
 from almond.core.records import upsert_record_if_epoch
 from almond.core.storage import storage_epoch
 from almond.web.webui import imgproxy
@@ -41,7 +41,11 @@ def fetch_one(h, qs: dict, body: dict) -> None:
         })
         return
 
+    # resolve_proxy 定「走不走、用哪个地址」；forced_route 定「用户有没有显式指定
+    # 路由」——后者随任务带进 fetch_page：显式规则是明确意志，学习层（策略成绩册
+    # 最快者当选）不许盖过，否则「指定用代理」会被学到的 direct 策略架空
     proxy = resolve_proxy(url, global_proxy)
+    route = forced_route(url)
     rules = get_domain_fetch_config(url)
     if proxy:
         proxy = ensure_working_proxy(proxy)
@@ -53,6 +57,7 @@ def fetch_one(h, qs: dict, body: dict) -> None:
         url=url, proxy=proxy,
         selector=rules["detail_selector"] or None,
         cover=rules["cover"],
+        force_route=route,
     )
     payload = {"ok": True, "job_id": job_id}
     # 代理端口已被顶替时，立即告知前端跟上新地址（不用等轮询结果）
@@ -147,6 +152,7 @@ def confirm_stage(h, qs: dict, body: dict) -> None:
     report = confirm.confirm_domains(
         domains=domains,
         proxy_for=lambda u: resolve_proxy(u, gp),
+        route_for=lambda u: forced_route(u),
         start_epoch=start_epoch,
         force=bool(body.get("force")),
     )

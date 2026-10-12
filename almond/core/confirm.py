@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from almond.core import fetch_hints, fetchpool, records, storage
 from almond.core.domains import get_domain_fetch_config, list_domains
-from almond.core.hostutil import root_domain
+from almond.core.hostutil import is_domestic, root_domain
 from almond.core.log import logger
 
 _TEST_WORKERS = 8      # 与 fetchpool 子进程池同为 8（前端补抓 5 并发是浏览器侧，不一一对应）
@@ -84,7 +84,7 @@ def _decide(domain: str, urls: list, force: bool = False) -> tuple:
 
 
 def _test_one(domain: str, url: str, proxy_for, start_epoch: int,
-              probe: bool = False) -> tuple:
+              probe: bool = False, route_for=None) -> tuple:
     """对单个域名的真实网址跑一次完整测试抓取（fetchpool 子进程）。
 
     返回 (status, info)：status ∈ confirmed / failed / transient / aborted。
@@ -96,12 +96,20 @@ def _test_one(domain: str, url: str, proxy_for, start_epoch: int,
     `probe=True`：根网址只读探测（域名没有待抓记录时「刷新」按钮的兜底）——
     结论照写（效应 + confirm），但**不 upsert**：synthesized 的根网址不是用户
     收藏的链接，不能凭空写进看板。
+
+    `route_for`：域名 → 显式路由（`proxy.forced_route` 的结论），随任务带进
+    `fetch_page`——用户指定了「用代理」的域名，确认阶段也要按代理试，学到的
+    direct 策略不许架空该指定。显式要代理却拿不到代理地址（全局代理未配置）
+    且不是国内站 → **transient**：代理就绪前不下「无方案」的持久结论。
     """
     rules = get_domain_fetch_config(url)
     proxy = (proxy_for(url) if proxy_for else None) or None
+    route = route_for(url) if route_for else None
+    if route == "proxy" and not proxy and not is_domestic(url):
+        return ("transient", "显式规则要求走代理，但当前没有可用代理")
     job = fetchpool.submit(url=url, proxy=proxy, epoch=start_epoch,
                            selector=rules["detail_selector"] or None,
-                           cover=rules["cover"])
+                           cover=rules["cover"], force_route=route)
     try:
         got = fetchpool.wait(job)
     except TimeoutError:
@@ -127,7 +135,8 @@ def _test_one(domain: str, url: str, proxy_for, start_epoch: int,
 
 
 def confirm_domains(domains: list | None = None, proxy_for=None,
-                    start_epoch: int | None = None, force: bool = False) -> dict:
+                    start_epoch: int | None = None, force: bool = False,
+                    route_for=None) -> dict:
     """确认一批域名的抓取方案（并发测试，最多 8 路，与 fetchpool 同池）。
 
     返回 report：{ready, confirmed, failed, skipped, transient, aborted}——
@@ -137,6 +146,9 @@ def confirm_domains(domains: list | None = None, proxy_for=None,
 
     `force=True`（「刷新」按钮）：绕过「结论已定不再尝试」，且对没有待抓网址的
     域名改用根网址只读探测；自动路径（backfill 调用）不传 force，语义不变。
+
+    `route_for`：域名 → 显式路由（`proxy.forced_route`），随测试任务带进
+    `fetch_page`；缺省 None（不约束路由，学习层自由发挥）。
     """
     if start_epoch is None:
         start_epoch = storage.storage_epoch()
@@ -161,7 +173,8 @@ def confirm_domains(domains: list | None = None, proxy_for=None,
     if tests:
         with ThreadPoolExecutor(max_workers=min(_TEST_WORKERS, len(tests))) as pool:
             results = list(pool.map(
-                lambda t: _test_one(t[0], t[1], proxy_for, start_epoch, t[0] in probes), tests
+                lambda t: _test_one(t[0], t[1], proxy_for, start_epoch,
+                                    t[0] in probes, route_for), tests
             ))
         for (d, _url), (status, info) in zip(tests, results):
             if status == "confirmed":

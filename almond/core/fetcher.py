@@ -91,7 +91,8 @@ def _fetch_stale(host: str | None) -> bool:
     return False
 
 
-def fetch_page(url: str, timeout: int = 20, proxy: str | None = None):
+def fetch_page(url: str, timeout: int = 20, proxy: str | None = None,
+               force_route: str | None = None):
     """按 Fetcher → DynamicFetcher → StealthyFetcher 降级抓取，成功返回 Response，全部失败返回 None。
 
     国内网站自动跳过代理直连；外国站配置代理时先用代理抓取，代理不可用则回退直连重试整条降级链。
@@ -107,16 +108,31 @@ def fetch_page(url: str, timeout: int = 20, proxy: str | None = None):
        路由切换类的发现也从这里来）；
     3. 常规链拿到 401/403/429/503（被反爬拦）→ 在当前路由上按 _DISCOVERY_SPECS
        定制扩展策略（换指纹/真 Chrome/DoH），首个成功者入库并计时。
+
+    `force_route`（`proxy.forced_route` 的结论，`"proxy"`/`"direct"`/None）=
+    用户**显式规则**指定的路由。全局默认值只是「没表态时的办法」，学习层可以盖过；
+    显式规则是明确意志，学习层不许盖过：
+    - 路线不符的活跃策略本轮**不用**（不弃用——没被证伪，只是不合当前配置），
+      直接交常规链按显式路由抓；
+    - `"proxy"` → 常规链不再回退直连（`proxy_only`，与「已知直连不通」同款）；
+    - `"proxy"` 而调用方根本没给代理地址（全局代理未配置/被清空）→ 本轮不抓取
+      （与 `skip_reason` 同哲学：该走的路不在，不烧引擎，更不 silently 直连）；
+    - `"direct"` → 代理参数作废（「规则命中即为强制值」，不再向下兜底）。
+    国内旁路优先于一切代理规则（`is_domestic`）：国内站就算 force_route="proxy"
+    也直连——与 `resolve_proxy` 的结论保持一致。
     """
     fetch_hints.enter_fetch()   # 绑定存储纪元：抓取期间切库 → 本函数后续所有缓存写入作废
     host = urlparse(url).hostname
-    if proxy and is_domestic(url):
+    if force_route == "direct":
+        proxy = None                # 显式直连：代理参数作废（与 resolve_proxy 同结论）
+    elif proxy and is_domestic(url):
         logger.info(f"国内站点，跳过代理直连：{host}")
         proxy = None
 
     # 代理先做健康顶替：端口开着但转发不通 → 在本机 7889-7899 找可用端口换上，
     # 而不是拿着坏端口往下跑（放最前面，skip_reason 也要按顶替后的地址判定；
     # 顶替动作的日志由 ensure_working_proxy 统一打）
+    had_proxy = bool(proxy)         # 调用方给了代理地址（显式规则或全局默认）——记下来
     if proxy:
         proxy = ensure_working_proxy(proxy)
     reason = fetch_hints.skip_reason(url, proxy)
@@ -126,6 +142,13 @@ def fetch_page(url: str, timeout: int = 20, proxy: str | None = None):
     if proxy and not proxy_reachable(proxy):
         logger.warning(f"代理 {proxy} 转发不通（区间内无可用顶替端口），本轮降级直连：{host}")
         proxy = None
+    # 显式规则要求走代理、调用方却根本没给代理地址 → 不抓：silently 直连正是
+    # 「规则形同虚设」的来源（用户指定了用代理，实际全走直连）。给了地址但转发
+    # 不通的仍按上文降级直连（环境性故障，与全局默认路同一兜底哲学）。
+    # 国内站不在此列——国内旁路优先于代理规则，此时 proxy=None 是旁路的果。
+    if force_route == "proxy" and not had_proxy and not is_domestic(url):
+        logger.info(f"显式规则要求走代理，但未配置代理地址，本轮不抓取：{host}")
+        return None
 
     # ── 0) Cookie 优先：存过 Cookie 就先带它静态直取一发；
     #        成功即返回（记耗时、会话轮换一并回写），失效/没存则走下面的策略与常规逻辑 ──
@@ -169,6 +192,13 @@ def fetch_page(url: str, timeout: int = 20, proxy: str | None = None):
         if not strat or strat["id"] in tried:
             break
         sid = strat["id"]
+        # 显式规则指定的路由与策略路线不符 → 本轮不用它：**不弃用**（没被证伪，
+        # 只是不合当前配置，用户取消指定后它仍是最快方案），也不必顺位（成绩册
+        # 只暴露活跃位）——直接交常规链按显式路由抓。没有这一条，学过的
+        # direct|static 会永远盖过用户「用代理」的指定（github.com 的直连逻辑）。
+        if force_route and not sid.startswith(force_route + "|"):
+            logger.info(f"策略 {sid} 与显式路由 {force_route} 不符，本轮不用，走常规链")
+            break
         tried.add(sid)
         if hints_strategy.strategy_stale(url):
             logger.info(f"策略 {sid}（历史最快 {strat.get('best_ms')}ms）距上次成功已超过 "
@@ -203,7 +233,11 @@ def fetch_page(url: str, timeout: int = 20, proxy: str | None = None):
         ("dynamic", lambda p: DynamicFetcher.fetch(url, timeout=timeout * 1000, proxy=p)),
         ("stealth", lambda p: StealthyFetcher.fetch(url, timeout=timeout * 1000, proxy=p)),
     )
-    proxy_only = bool(proxy) and fetch_hints.proxy_needed(url)
+    # 「已知直连不通」与「显式规则要求走代理」都只跑代理组合，不跑直连兜底
+    # （前者是经验结论，后者是用户意志——「规则命中即为强制值」）
+    proxy_only = bool(proxy) and (
+        fetch_hints.proxy_needed(url) or force_route == "proxy"
+    )
     if proxy_only:
         logger.info(f"经验缓存：{urlparse(url).hostname} 直连不通，仅走代理抓取")
     combos: list[tuple] = [(n, fn, proxy) for n, fn in engines] if proxy else []
@@ -296,16 +330,19 @@ def extract_metadata(response, base_url: str) -> dict:
 
 
 def get_metadata(url: str, timeout: int = 20, proxy: str | None = None,
-                 selector: str | None = None, cover: bool | None = None) -> dict:
+                 selector: str | None = None, cover: bool | None = None,
+                 force_route: str | None = None) -> dict:
     """抓取一个 URL 的元数据；全部抓取失败时仅保留 URL，标题留空供手动补充。
 
     selector：按站点覆盖详情选择器（空/None 用默认 DETAIL_SELECTOR）——
       域名级配置（domains.detail_selector）由调用方传进来，选择器写错只会让详情为空。
     cover：按域名的封面开关——False=不要封面，True=只要图标（拿 favicon 当封面），
       None=默认走 og:image。
+    force_route：用户显式规则指定的路由（`proxy.forced_route` 的结论），
+      见 `fetch_page`——约束策略层与常规链，默认 None（学习层自由发挥）。
     """
     meta = {"url": url, "title": "", "thumbnail": "", "favicon": "", "success": False, "details": []}
-    response = fetch_page(url, timeout=timeout, proxy=proxy)
+    response = fetch_page(url, timeout=timeout, proxy=proxy, force_route=force_route)
     if response is None:
         return meta
     base_url = getattr(response, "url", None) or url

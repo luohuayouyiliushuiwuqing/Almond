@@ -288,6 +288,24 @@ def resolve_proxy(url: str, global_proxy: str) -> str | None:
     return proxy
 
 
+def forced_route(url: str) -> str | None:
+    """用户**显式规则**指定的路由（`"proxy"` / `"direct"`）；没有显式规则返回 None。
+
+    与 `effective_proxy` 同源同序（URL 模式规则 > 域名规则），但**不含全局默认值**：
+    全局默认只是「用户没表态时的办法」，学习层（策略成绩册的最快者当选）可以盖过它；
+    显式规则是用户的明确意志，学习层不许盖过——`fetch_page(force_route=…)` 据此
+    过滤策略、强制代理时不再回退直连。国内旁路不在这里（它在 `resolve_proxy`，
+    国内站就算规则说用代理也直连）。
+    """
+    hit, need = match_rule(url)
+    if hit:
+        return "proxy" if need else "direct"
+    domain_need = domains.get_domain_need_proxy(url)
+    if domain_need is not None:
+        return "proxy" if domain_need else "direct"
+    return None
+
+
 # ---------------------------------------------------------------- 侧栏徽标
 
 def list_proxy_domains() -> list[str]:

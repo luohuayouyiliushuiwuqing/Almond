@@ -101,12 +101,12 @@ almond/web/webui/server.py  薄 Handler：路由表合并 + dispatch + 兜底
 almond/web/webui/api_*.py   按资源 REST 处理器（fetch/records/domains/proxy/storage）
 almond/web/webui/{api_util,staticfiles,imgproxy,fsbrowse}.py  校验助手 / 静态 / 图片 / 目录
     ↓
-almond/core/fetcher.py      三级降级抓取 + 元数据/详情提取
+almond/core/fetcher.py      三级降级抓取 + 元数据/详情提取（force_route：显式路由约束策略层）
 almond/core/fetchpool.py    抓取子进程池：/api/fetch 的执行器，切库即硬杀进程树
 almond/core/confirm.py      方案确认：自动抓取前先试出每个域名的可用方案
 almond/core/fetch_hints.py  经验缓存本体：JSON 存取 + 效应通道 + 纪元门 + 可达性 + plan/confirm
 almond/core/hints_strategy.py 策略成绩册 · hints_cookie.py Cookie 层
-almond/core/proxy.py        代理唯一入口：规则匹配 + resolve_proxy + 转发健康 + 端口顶替 + 定时刷新
+almond/core/proxy.py        代理唯一入口：规则匹配 + resolve_proxy/forced_route + 转发健康 + 端口顶替 + 定时刷新
 almond/core/storage.py      存储目录 / 纪元 / SWITCH_LOCK · db.py SQLite 连接+迁移
 almond/core/records.py      记录/标签/规则 CRUD · domains.py 域名配置+重置
 almond/core/hostutil.py     根域名 + 国内判定 · fields.py「标签: 值」· log.py 日志
