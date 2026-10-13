@@ -26,10 +26,11 @@ def update(h, qs: dict, body: dict) -> None:
         send_json(h, {"ok": False, "error": "缺少域名"}, 400)
         return
     # 只透传请求体里出现的字段（后端按 _UNSET 语义跳过没给的）：
-    # need_proxy / auto_fetch / cover 是三态（null = 跟随全局 / 默认）
+    # need_proxy / auto_fetch / cover 是三态（null = 跟随全局 / 默认）；
+    # detail_mode 只认 '' / 'tags'（update_domain 归一化，脏值按 '' 落）
     kwargs = {}
     for key in ("display_name", "need_proxy", "prefs",
-                "auto_fetch", "detail_selector", "cover"):
+                "auto_fetch", "detail_selector", "detail_mode", "cover"):
         if key in body:
             kwargs[key] = body.get(key)
     try:

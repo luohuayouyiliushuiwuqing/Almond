@@ -1,7 +1,8 @@
 """域名配置与域名重置。
 
 `domains` 表是每域名的配置仓：显示名 / 代理三态（NULL 跟随全局，1 用代理，0 强制直连）/
-自动补抓开关 / 详情选择器 / 封面规则 / 子页显示偏好（prefs）。
+自动补抓开关 / 详情选择器与提取形态（detail_selector + detail_mode）/ 封面规则 /
+子页显示偏好（prefs）。
 `replace_domain` 在 TLD 失效时把整个域名（含子域名）在库里的引用整体改写成新域名。
 """
 
@@ -32,6 +33,8 @@ def _domain_row(row) -> dict:
             "prefs": prefs,
             "auto_fetch": None if row["auto_fetch"] is None else bool(row["auto_fetch"]),
             "detail_selector": row["detail_selector"] or "",
+            # 详情提取形态：''=「标签: 值」行（默认），'tags'=扁平标签链
+            "detail_mode": row["detail_mode"] or "",
             "cover": None if row["cover"] is None else bool(row["cover"])}
 
 
@@ -43,7 +46,7 @@ def list_domains() -> list[dict]:
 
 def update_domain(name: str, display_name=_UNSET, need_proxy=_UNSET,
                   prefs=_UNSET, auto_fetch=_UNSET, detail_selector=_UNSET,
-                  cover=_UNSET) -> dict:
+                  detail_mode=_UNSET, cover=_UNSET) -> dict:
     with db.conn() as conn:
         # 确保域名存在
         conn.execute("INSERT OR IGNORE INTO domains (name) VALUES (?)", (name,))
@@ -67,6 +70,10 @@ def update_domain(name: str, display_name=_UNSET, need_proxy=_UNSET,
         if detail_selector is not _UNSET:
             conn.execute("UPDATE domains SET detail_selector = ? WHERE name = ?",
                          (detail_selector or "", name))
+        if detail_mode is not _UNSET:
+            # 只认 '' 与 'tags' 两个值：其余（含历史脏数据）一律归一成 ''
+            mode = "tags" if detail_mode == "tags" else ""
+            conn.execute("UPDATE domains SET detail_mode = ? WHERE name = ?", (mode, name))
         if cover is not _UNSET:
             value = None if cover is None else (1 if cover else 0)
             conn.execute("UPDATE domains SET cover = ? WHERE name = ?", (value, name))
@@ -87,20 +94,21 @@ def get_domain_need_proxy(url: str) -> bool | None:
 
 
 def get_domain_fetch_config(url: str) -> dict:
-    """该域名的抓取规则（`/api/fetch` 用）：详情选择器 + 封面开关。
+    """该域名的抓取规则（`/api/fetch` 用）：详情选择器 + 提取形态 + 封面开关。
     **故意不返回代理结论**——代理优先级由 `proxy.resolve_proxy` 统一算
     （URL 模式规则 > 域名规则 > 全局），在这里拿 need_proxy 去覆盖它会打乱优先级。"""
-    out = {"detail_selector": "", "cover": None}
+    out = {"detail_selector": "", "detail_mode": "", "cover": None}
     domain = root_domain(url)
     if not domain:
         return out
     with db.conn() as conn:
         row = conn.execute(
-            "SELECT detail_selector, cover FROM domains WHERE name = ?", (domain,)
+            "SELECT detail_selector, detail_mode, cover FROM domains WHERE name = ?", (domain,)
         ).fetchone()
     if row is None:
         return out
     return {"detail_selector": row["detail_selector"] or "",
+            "detail_mode": row["detail_mode"] or "",
             "cover": None if row["cover"] is None else bool(row["cover"])}
 
 

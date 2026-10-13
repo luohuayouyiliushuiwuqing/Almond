@@ -834,6 +834,17 @@ main {
 .detail-value a { color: var(--accent); text-decoration: none; margin-right: 8px; }
 .detail-value a:hover { text-decoration: underline; }
 .detail-empty { color: var(--faint); font-size: 13.5px; padding: 18px 0; text-align: center; }
+/* 详情弹层：标签链芯片（detail_mode="tags" 的产物——label 为空的连续项一行展示） */
+.detail-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.detail-chip {
+  display: inline-block;
+  font-size: 12.5px; line-height: 1.6;
+  padding: 0 10px;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg); color: var(--ink);
+  text-decoration: none;
+}
+a.detail-chip:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-weak); }
 
 /* ---------- 域名分组（可折叠）---------- */
 .domain-group {

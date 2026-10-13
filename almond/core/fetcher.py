@@ -9,7 +9,7 @@ from urllib.parse import urljoin, urlparse
 from scrapling.fetchers import DynamicFetcher, Fetcher, StealthyFetcher
 
 from almond.core import fetch_hints, hints_cookie, hints_strategy
-from almond.core.fields import extract_fields
+from almond.core.fields import extract_fields, extract_tags
 from almond.core.hostutil import is_domestic
 from almond.core.log import logger
 from almond.core.proxy import ensure_working_proxy, proxy_reachable
@@ -331,7 +331,7 @@ def extract_metadata(response, base_url: str) -> dict:
 
 def get_metadata(url: str, timeout: int = 20, proxy: str | None = None,
                  selector: str | None = None, cover: bool | None = None,
-                 force_route: str | None = None) -> dict:
+                 force_route: str | None = None, detail_mode: str | None = None) -> dict:
     """抓取一个 URL 的元数据；全部抓取失败时仅保留 URL，标题留空供手动补充。
 
     selector：按站点覆盖详情选择器（空/None 用默认 DETAIL_SELECTOR）——
@@ -340,6 +340,11 @@ def get_metadata(url: str, timeout: int = 20, proxy: str | None = None,
       None=默认走 og:image。
     force_route：用户显式规则指定的路由（`proxy.forced_route` 的结论），
       见 `fetch_page`——约束策略层与常规链，默认 None（学习层自由发挥）。
+    detail_mode：按域名的详情提取形态（domains.detail_mode）——
+      None/""=「标签: 值」行（默认，selector 留空用 DETAIL_SELECTOR）；
+      "tags"=扁平标签链（extract_tags：**每个匹配元素本身就是一个标签**，
+      如 B 站 .tag-panel .tag-link）。tags 模式**没有默认选择器**：留空一律
+      详情为空——绝不拿 .space-y-2 > * 的行结构硬套标签链。
     """
     meta = {"url": url, "title": "", "thumbnail": "", "favicon": "", "success": False, "details": []}
     response = fetch_page(url, timeout=timeout, proxy=proxy, force_route=force_route)
@@ -348,7 +353,10 @@ def get_metadata(url: str, timeout: int = 20, proxy: str | None = None,
     base_url = getattr(response, "url", None) or url
     meta.update(extract_metadata(response, base_url))
     try:
-        meta["details"] = extract_fields(response.css(selector or DETAIL_SELECTOR))
+        if detail_mode == "tags":
+            meta["details"] = extract_tags(response.css(selector), base_url) if selector else []
+        else:
+            meta["details"] = extract_fields(response.css(selector or DETAIL_SELECTOR))
     except Exception:  # 解析任意 HTML 时个别页面可能出错（含非法选择器），不影响主元数据
         meta["details"] = []
     if cover is False:

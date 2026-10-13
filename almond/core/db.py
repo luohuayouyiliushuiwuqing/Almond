@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS domains (
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 )
 """
-
+# 域名级抓取规则的列不进建表语句：全部走 _migrate 的「先查后加」——
+# 老库升级与新库首建同一条路径，避免两处 DDL 漂移（见 _migrate 注释）。
 _SCHEMA_TAGS = """
 CREATE TABLE IF NOT EXISTS tags (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,6 +130,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("prefs", "TEXT NOT NULL DEFAULT '{}'"),          # JSON：{sort, fields[], tag}
         ("auto_fetch", "INTEGER"),                        # NULL=跟随全局, 1=开, 0=关（补抓不碰）
         ("detail_selector", "TEXT NOT NULL DEFAULT ''"),  # '' = 用默认 .space-y-2 > *
+        ("detail_mode", "TEXT NOT NULL DEFAULT ''"),      # '' = 标签:值行；'tags' = 扁平标签链
         ("cover", "INTEGER"),                             # NULL=默认(og), 0=不要封面, 1=只要图标
     ):
         if col not in cols:

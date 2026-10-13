@@ -109,6 +109,7 @@ def _test_one(domain: str, url: str, proxy_for, start_epoch: int,
         return ("transient", "显式规则要求走代理，但当前没有可用代理")
     job = fetchpool.submit(url=url, proxy=proxy, epoch=start_epoch,
                            selector=rules["detail_selector"] or None,
+                           detail_mode=rules["detail_mode"] or None,
                            cover=rules["cover"], force_route=route)
     try:
         got = fetchpool.wait(job)

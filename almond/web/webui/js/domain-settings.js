@@ -20,17 +20,18 @@ function fieldWrap(labelText, node, hint) {
   const label = el("label", null, labelText);
   label.appendChild(node);
   wrap.appendChild(label);
-  if (hint) wrap.appendChild(el("div", "dp-hint", hint));
+  // hint 可以是字符串（自建 div）也可以是现成节点（调用方要随后改文案）
+  if (hint) wrap.appendChild(typeof hint === "string" ? el("div", "dp-hint", hint) : hint);
   return wrap;
 }
 
 /** 构建域名设置表单。
- *  opts.fields ⊆ ["alias","proxy","auto","cover","selector","reset"]（默认全开）；
+ *  opts.fields ⊆ ["alias","proxy","auto","cover","mode","selector","reset"]（默认全开）；
  *  opts.compact 适配弹窗窄布局；opts.onResetDone(data) 重置成功后的入口收尾。
  *  返回的 box 带 `box.__collect()` → PATCH /api/domain 的字段集（按 fields 裁剪）。
  */
 export function buildSettingsForm(domain, cfg, opts = {}) {
-  const fields = opts.fields || ["alias", "proxy", "auto", "cover", "selector", "reset"];
+  const fields = opts.fields || ["alias", "proxy", "auto", "cover", "mode", "selector", "reset"];
   const box = el("div", opts.compact ? "dp-settings dp-compact" : "dp-settings");
   const parts = {};
 
@@ -63,13 +64,37 @@ export function buildSettingsForm(domain, cfg, opts = {}) {
     box.appendChild(fieldWrap("封面来源", parts.cover,
       "默认取 og:image；「不要封面」抓完后清空封面（显示字母占位），「只要图标」用站点图标当封面。对**之后的重新抓取**生效"));
   }
+  if (fields.includes("mode")) {
+    parts.mode = el("select", "input");
+    parts.mode.innerHTML =
+      '<option value="">标签: 值行（默认）</option>' +
+      '<option value="tags">标签链（每个匹配元素即一个标签）</option>';
+    parts.mode.value = cfg.detail_mode === "tags" ? "tags" : "";
+    box.appendChild(fieldWrap("详情提取模式", parts.mode,
+      "「标签: 值行」解析「发行日期: 2020-01-01」这类结构（默认选择器 .space-y-2 > *）；" +
+      "「标签链」解析扁平标签列表（如 B 站视频页的标签面板）。只影响之后的抓取"));
+  }
   if (fields.includes("selector")) {
     parts.selector = el("input", "input");
     parts.selector.value = cfg.detail_selector || "";
-    parts.selector.placeholder = "留空用默认 .space-y-2 > *";
     parts.selector.spellcheck = false;
-    box.appendChild(fieldWrap("详情字段选择器", parts.selector,
-      "按站点覆盖默认的 .space-y-2 > *；选择器无效时详情为空（不报错），同样对之后的抓取生效"));
+    /* 选择器的含义随模式变：占位符与提示同步切（tags 模式没有默认选择器） */
+    const hint = el("div", "dp-hint");
+    const syncHint = () => {
+      if (parts.mode && parts.mode.value === "tags") {
+        parts.selector.placeholder = "必填：每个标签元素的选择器，如 .tag-panel .tag-link";
+        hint.textContent =
+          "标签链模式没有默认选择器——留空 = 不提取详情。B 站视频页可用 .tag-panel .tag-link" +
+          "（音乐/话题/普通标签全在内，「展开更多」按钮不是链、不会被误抓）";
+      } else {
+        parts.selector.placeholder = "留空用默认 .space-y-2 > *";
+        hint.textContent =
+          "按站点覆盖默认的 .space-y-2 > *；选择器无效时详情为空（不报错），同样对之后的抓取生效";
+      }
+    };
+    if (parts.mode) parts.mode.addEventListener("change", syncHint);
+    syncHint();
+    box.appendChild(fieldWrap("详情字段选择器", parts.selector, hint));
   }
   if (fields.includes("reset")) {
     /* 域名重置：危险操作单独一行 + 二次确认（输入行自带触发按钮，两个入口同款） */
@@ -96,6 +121,7 @@ export function buildSettingsForm(domain, cfg, opts = {}) {
     if (parts.auto) out.auto_fetch = parts.auto.value === "" ? null : parts.auto.value === "1";
     if (parts.cover) out.cover = parts.cover.value === "" ? null : parts.cover.value === "1";
     if (parts.selector) out.detail_selector = parts.selector.value.trim();
+    if (parts.mode) out.detail_mode = parts.mode.value === "tags" ? "tags" : "";
     return out;
   };
   return box;

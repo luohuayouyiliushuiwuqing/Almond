@@ -56,6 +56,7 @@ def fetch_one(h, qs: dict, body: dict) -> None:
         epoch=start_epoch,
         url=url, proxy=proxy,
         selector=rules["detail_selector"] or None,
+        detail_mode=rules["detail_mode"] or None,
         cover=rules["cover"],
         force_route=route,
     )

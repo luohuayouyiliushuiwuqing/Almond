@@ -324,7 +324,11 @@ function buildRow(record, prefs) {
 
 function briefText(record) {
   return (record.details || []).slice(0, 2)
-    .map((d) => `${d.label}：${d.value || (d.links && d.links[0] && d.links[0].text) || ""}`)
+    .map((d) => {
+      const v = d.value || (d.links && d.links[0] && d.links[0].text) || "";
+      // 标签链模式产物没有 label：直接展示值，别产出「：爵士舞」这种前导冒号
+      return d.label ? `${d.label}：${v}` : v;
+    })
     .join("　·　");
 }
 

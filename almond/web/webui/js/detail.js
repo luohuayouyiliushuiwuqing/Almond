@@ -41,10 +41,39 @@ function renderDetail(record) {
   }
   const details = record.details || [];
   if (!details.length) {
-    box.appendChild(el("div", "detail-empty", "页面中未提取到 .space-y-2 详情字段，点「重新抓取」更新"));
+    box.appendChild(el("div", "detail-empty",
+      "未提取到详情字段——该域名可在域名设置里配置详情选择器，或点「重新抓取」更新"));
     return;
   }
-  for (const f of details) {
+  let i = 0;
+  while (i < details.length) {
+    const f = details[i];
+    /* 标签链模式（detail_mode="tags"）：产物 label 全为空——
+       连续的项合并成一行标签芯片，不让一个标签占一行 */
+    if (!f.label) {
+      const row = el("div", "detail-row");
+      row.appendChild(el("span", "detail-label", "标签"));
+      const chips = el("span", "detail-chips");
+      while (i < details.length && !details[i].label) {
+        const g = details[i++];
+        const first = (g.links && g.links[0]) || null;
+        if (first) {
+          const a = document.createElement("a");
+          a.className = "detail-chip";
+          a.textContent = g.value || first.text || first.href;
+          a.href = first.href;
+          a.target = "_blank";
+          a.rel = "noopener";
+          a.title = first.href;
+          chips.appendChild(a);
+        } else {
+          chips.appendChild(el("span", "detail-chip", g.value));
+        }
+      }
+      row.appendChild(chips);
+      box.appendChild(row);
+      continue;
+    }
     const row = el("div", "detail-row");
     row.appendChild(el("span", "detail-label", f.label));
     const value = el("span", "detail-value");
@@ -69,6 +98,7 @@ function renderDetail(record) {
     }
     row.appendChild(value);
     box.appendChild(row);
+    i++;
   }
 }
 
