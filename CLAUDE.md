@@ -37,9 +37,12 @@ that posts to the snapshot-import API. UI strings, code comments and commit mess
 3. **Docs are a two-repo commit.** `docs/` is a git submodule (→ AlmondMD): commit *inside* `docs/`
    first, then commit the bumped pointer in the parent (`git add docs && git commit`). `README.md`
    and this file are the only files that stay in the parent repo.
-4. **Entry points.** Only `almond-webui` / `almond-demo` / `python -m …` (the latter run from the
-   repo root). Never document or recommend `python almond/web/webui/server.py` — absolute imports
-   need `almond` on `sys.path`, which a direct script run does not provide.
+4. **Entry points.** Only `almond-webui` / `almond-demo` / `almond-webui-qt` / `python -m …`
+   (the latter run from the repo root). Never document or recommend
+   `python almond/web/webui/server.py` — absolute imports need `almond` on `sys.path`,
+   which a direct script run does not provide. `almond-webui-qt` is the optional PySide6
+   desktop UI (needs `pip install PySide6`, see `requirements-qt.txt`); it reuses `almond.core`
+   directly and coexists with the webui, sharing the same storage dir + `metadata.db`.
 
 ## Commands
 
@@ -54,7 +57,9 @@ pip install -e . --no-deps --no-build-isolation --no-index   # console entry poi
 # run
 almond-webui [--host 0.0.0.0] [--port 4000]   # board → http://0.0.0.0:4000/
 almond-demo                                    # selector playground → http://127.0.0.1:8765/
+almond-webui-qt                                # 原生 QT6 桌面界面（需 PySide6）→ 本地窗口
 python -m almond.web.webui.server [...]        # same, without installing (from repo root)
+python -m almond.qt                            # same as almond-webui-qt, without installing
 
 # stop board + demo, including fetched browser process trees (ports 4000, 8765)
 ./stop_service.sh                              # Windows twins: stop_service.ps1 / stop_service.bat

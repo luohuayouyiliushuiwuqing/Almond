@@ -1,0 +1,6 @@
+# Almond QT6 界面（PySide6）的可选依赖。
+# 主 requirements.txt 不收录它，避免强制 webui 用户安装 Qt；
+# 需要 QT 界面时单独安装：
+#   pip install -r requirements-qt.txt
+# 或：pip install PySide6
+PySide6==6.7.2

@@ -22,6 +22,7 @@ dynamic = ["dependencies"]
 [project.scripts]
 almond-webui = "almond.web.webui.server:main"
 almond-demo = "almond.web.demo.server:main"
+almond-webui-qt = "almond.qt.app:main"
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }

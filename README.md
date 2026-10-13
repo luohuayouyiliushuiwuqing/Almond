@@ -26,6 +26,11 @@ Almond/
 │   │   ├── confirm.py     # 方案确认：自动抓取前先试出每个域名的最优抓取方案，没方案整组跳过
 │   │   ├── fields.py      # 「标签: 值」字段解析（看板与试验台共用）
 │   │   └── records.py     # SQLite 存储层
+│   ├── qt/               # 可选：原生 QT6 桌面界面（PySide6，almond-webui-qt）
+│   │   ├── app.py         # 入口（缺 PySide6 时友好提示）
+│   │   ├── main_window.py # 主窗口：侧栏 + 卡片网格 + 工具栏
+│   │   ├── backend.py     # FetchManager（QThread 抓取池，复用 core）
+│   │   ├── card.py / dialogs.py / imageloader.py / flowlayout.py
 │   └── web/
 │       ├── webui/         # 主界面：Raindrop 看板（默认 0.0.0.0:4000）
 │       │   ├── server.py  # 路由分发 + REST API
@@ -89,6 +94,23 @@ python -m almond.web.webui.server [--host 0.0.0.0] [--port 4000]
 - **域名子页面**：侧栏域名行**点名字仍是筛选**，行**左「编辑」**开弹窗、行**右「详情」**进该域名的子页（地址栏变 `#/domain/xxx`，刷新、浏览器后退、直接分享链接都能用）；零散域名（侧栏不显示的）从「代理」面板的域名列表进入。子页里是**该域名专属的列表清单**——域头给统计与设置（别名 / 代理 / 自动补抓开关 / 封面来源 / 按站点详情选择器 / 域名重置），工具栏的**排序、展示字段、标签筛选按域名记住**，下次进这个域名自动套用；列表行可勾选，直接复用看板的全选 / 反选 / 标签 / 重新抓取 / 删除 / 导出
 - 点缩略图或标题在新标签打开链接
 
+### QT6 桌面界面（可选）
+
+与 webui **并存**：同一套 `almond.core`，共享同一存储目录与 `metadata.db`，无需启动 web 服务。原生 PySide6 控件（非网页套壳）。
+
+```bash
+pip install PySide6        # 或 pip install -r requirements-qt.txt
+
+almond-webui-qt            # 直接拉起本地 QT 窗口
+python -m almond.qt        # 免安装等价写法（仓库根目录执行）
+```
+
+- 左侧栏按**域名**（带计数与「代理」标记）与**标签**筛选；顶部搜索过滤标题 / URL
+- 卡片网格：缩略图（按 URL 走代理解析、国内站点直连）、标题、成功状态点、标签；**点击看详情**，**右键**重抓 / 重命名 / 标签 / 打开 / 删除
+- 工具栏：**添加**（多 URL 批量导入并补抓）、**补抓**（抓取所有从未抓过的记录）、**标签**（全局标签管理）、**代理**（全局代理 + URL 规则 + 域名路由三态）、**存储**（切换数据库目录）、**刷新**
+- 打开自动把库里「从未抓取过」的灰点记录补抓完
+- ⚠ 与 webui 同时运行时，两者会并发写 `cache/fetch_hints.json`（跨进程无锁），建议错开使用
+
 ### 选择器试验台（演示）
 
 ```bash
@@ -138,7 +160,7 @@ python -m almond.web.demo.server
 - **代理**：映射只表达「要不要走代理」，地址统一填在「代理」面板的全局代理里（Clash 等，默认 `http://127.0.0.1:7897`，打开页面自动探测本机 7889-7899 并验证转发）。优先级 **URL 模式规则 > 域名规则 > 全局默认**，命中即为强制值（含「强制直连」）；国内域名自动跳过代理；当前端口转发不通时先自动顶替成本机可用端口，找不到才回退直连再试整条降级链
 - **合并规则**：按 URL 去重；抓取失败保留原记录；页面无标题时不覆盖手动补充的标题
 - **数据文件**：本地私有数据（`metadata.db`、图片缓存 `cache/img/` 等）统一放在**存储目录**——默认仓库根（已 gitignore），可在界面「存储」面板点选目录切换（不迁移，立即生效）；位置记录在仓库根 `config.json`（已 gitignore）。非 editable 安装可用环境变量 `ALMOND_DATA_DIR` 指定基础目录
-- **入口约定**：只支持 `almond-webui` / `almond-demo` 或 `python -m …`（后者需在仓库根目录执行）；不要直接 `python almond/web/webui/server.py`，它依赖 `sys.path`，行为随安装状态变化
+- **入口约定**：只支持 `almond-webui` / `almond-demo` / `almond-webui-qt` 或 `python -m …`（后者需在仓库根目录执行）；不要直接 `python almond/web/webui/server.py`，它依赖 `sys.path`，行为随安装状态变化。`almond-webui-qt` 需要 `pip install PySide6`（见 `requirements-qt.txt`）
 - **监听地址**：看板默认 `0.0.0.0:4000`（所有网卡，便于远程访问），可用 `--host` / `--port` 覆盖；选择器试验台仍固定 `127.0.0.1:8765`
 - **⚠ 无鉴权**：上表全部接口都对外可达。`POST /api/fetch`、`POST /api/confirm` 与 `GET /api/img` 会让**服务器**去抓取任意 URL（SSRF），`DELETE /api/record` 可直接删库，`GET /api/fs/list` 可列出服务器任意目录、`POST /api/storage-dir` 可把数据库搬走或重建。绑到 `0.0.0.0` 意味着任何能连上该端口的人都能调用这些接口。仅本机使用请加 `--host 127.0.0.1`；确需对外暴露时，在云安全组 / 防火墙上只放行可信 IP（云主机上还需放行安全组与 `firewalld`/`ufw` 的 4000 端口，否则外部访问会超时）；token 鉴权见 [docs/TODO.md](docs/TODO.md) 第 2 项
 - **调试抓取链**：抓取日志会打印到启动命令所在的终端
