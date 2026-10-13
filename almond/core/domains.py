@@ -33,7 +33,7 @@ def _domain_row(row) -> dict:
             "prefs": prefs,
             "auto_fetch": None if row["auto_fetch"] is None else bool(row["auto_fetch"]),
             "detail_selector": row["detail_selector"] or "",
-            # 详情提取形态：''=「标签: 值」行（默认），'tags'=扁平标签链
+            # 详情提取形态：''=「标签: 值」行（默认），'tags'=扁平标签链，'og'=OG 快速模式
             "detail_mode": row["detail_mode"] or "",
             "cover": None if row["cover"] is None else bool(row["cover"])}
 
@@ -71,8 +71,8 @@ def update_domain(name: str, display_name=_UNSET, need_proxy=_UNSET,
             conn.execute("UPDATE domains SET detail_selector = ? WHERE name = ?",
                          (detail_selector or "", name))
         if detail_mode is not _UNSET:
-            # 只认 '' 与 'tags' 两个值：其余（含历史脏数据）一律归一成 ''
-            mode = "tags" if detail_mode == "tags" else ""
+            # 只认 '' / 'tags' / 'og' 三个值：其余（含历史脏数据）一律归一成 ''
+            mode = detail_mode if detail_mode in ("", "tags", "og") else ""
             conn.execute("UPDATE domains SET detail_mode = ? WHERE name = ?", (mode, name))
         if cover is not _UNSET:
             value = None if cover is None else (1 if cover else 0)

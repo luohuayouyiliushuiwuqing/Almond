@@ -68,11 +68,14 @@ export function buildSettingsForm(domain, cfg, opts = {}) {
     parts.mode = el("select", "input");
     parts.mode.innerHTML =
       '<option value="">标签: 值行（默认）</option>' +
-      '<option value="tags">标签链（每个匹配元素即一个标签）</option>';
-    parts.mode.value = cfg.detail_mode === "tags" ? "tags" : "";
+      '<option value="tags">标签链（每个匹配元素即一个标签）</option>' +
+      '<option value="og">OG 快速模式（仅标题+封面，纯静态）</option>';
+    parts.mode.value = cfg.detail_mode === "tags" ? "tags"
+      : cfg.detail_mode === "og" ? "og" : "";
     box.appendChild(fieldWrap("详情提取模式", parts.mode,
       "「标签: 值行」解析「发行日期: 2020-01-01」这类结构（默认选择器 .space-y-2 > *）；" +
-      "「标签链」解析扁平标签列表（如 B 站视频页的标签面板）。只影响之后的抓取"));
+      "「标签链」解析扁平标签列表（如 B 站视频页的标签面板）；" +
+      "「OG 快速模式」只抓标题+封面、纯静态不起浏览器，最快。只影响之后的抓取"));
   }
   if (fields.includes("selector")) {
     parts.selector = el("input", "input");
@@ -81,11 +84,17 @@ export function buildSettingsForm(domain, cfg, opts = {}) {
     /* 选择器的含义随模式变：占位符与提示同步切（tags 模式没有默认选择器） */
     const hint = el("div", "dp-hint");
     const syncHint = () => {
-      if (parts.mode && parts.mode.value === "tags") {
+      const m = parts.mode ? parts.mode.value : "";
+      if (m === "tags") {
         parts.selector.placeholder = "必填：每个标签元素的选择器，如 .tag-panel .tag-link";
         hint.textContent =
           "标签链模式没有默认选择器——留空 = 不提取详情。B 站视频页可用 .tag-panel .tag-link" +
           "（音乐/话题/普通标签全在内，「展开更多」按钮不是链、不会被误抓）";
+      } else if (m === "og") {
+        parts.selector.placeholder = "OG 模式忽略此选择器";
+        hint.textContent =
+          "OG 快速模式只抓静态 HTML 的 head 里的 og:title / og:image，纯静态、不起浏览器、" +
+          "不解析正文详情，此选择器不生效";
       } else {
         parts.selector.placeholder = "留空用默认 .space-y-2 > *";
         hint.textContent =
@@ -121,7 +130,8 @@ export function buildSettingsForm(domain, cfg, opts = {}) {
     if (parts.auto) out.auto_fetch = parts.auto.value === "" ? null : parts.auto.value === "1";
     if (parts.cover) out.cover = parts.cover.value === "" ? null : parts.cover.value === "1";
     if (parts.selector) out.detail_selector = parts.selector.value.trim();
-    if (parts.mode) out.detail_mode = parts.mode.value === "tags" ? "tags" : "";
+    if (parts.mode) out.detail_mode =
+      parts.mode.value === "tags" ? "tags" : parts.mode.value === "og" ? "og" : "";
     return out;
   };
   return box;

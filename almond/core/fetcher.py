@@ -92,7 +92,7 @@ def _fetch_stale(host: str | None) -> bool:
 
 
 def fetch_page(url: str, timeout: int = 20, proxy: str | None = None,
-               force_route: str | None = None):
+               force_route: str | None = None, static_only: bool = False):
     """按 Fetcher → DynamicFetcher → StealthyFetcher 降级抓取，成功返回 Response，全部失败返回 None。
 
     国内网站自动跳过代理直连；外国站配置代理时先用代理抓取，代理不可用则回退直连重试整条降级链。
@@ -148,6 +148,38 @@ def fetch_page(url: str, timeout: int = 20, proxy: str | None = None,
     # 国内站不在此列——国内旁路优先于代理规则，此时 proxy=None 是旁路的果。
     if force_route == "proxy" and not had_proxy and not is_domestic(url):
         logger.info(f"显式规则要求走代理，但未配置代理地址，本轮不抓取：{host}")
+        return None
+
+    # ── 0.5) 静态专用（OG 快速模式）：只发 Fetcher.get，绝不起浏览器、
+    #         不预带/不写 Cookie 缓存。标题与封面都在静态 HTML 的 <head> 里，
+    #         浏览器渲染纯属浪费；任意失败直接返回 None（OG 卡片接受无数据，
+    #         不为它烧 DynamicFetcher/StealthyFetcher）。对所有站点通用，不含
+    #         任何域名特化（YouTube 的 og 标签同样在静态 HTML 里，自然受益）。
+    if static_only:
+        combos = []
+        if proxy:
+            combos.append(proxy)
+        combos.append(None)
+        for p in combos:
+            if _fetch_stale(host):
+                return None
+            t0 = time.time()
+            try:
+                response = Fetcher.get(url, timeout=timeout, proxy=p)
+            except Exception as exc:  # noqa: BLE001
+                via = f"（代理 {p}）" if p else ""
+                logger.debug(f"OG 静态抓取失败{via}（{type(exc).__name__}: {exc}）")
+                continue
+            ms = round((time.time() - t0) * 1000)
+            status = getattr(response, "status", None)
+            if p is None:
+                fetch_hints.record_direct_success(url)
+            else:
+                fetch_hints.record_proxy_success(url)
+            if response is not None and (status is None or status < 400):
+                logger.info(f"OG 静态抓取成功：{urlparse(url).hostname}（{ms}ms）")
+                return response
+            logger.debug(f"OG 静态抓取返回 HTTP {status}")
         return None
 
     # ── 0) Cookie 优先：存过 Cookie 就先带它静态直取一发；
@@ -331,7 +363,8 @@ def extract_metadata(response, base_url: str) -> dict:
 
 def get_metadata(url: str, timeout: int = 20, proxy: str | None = None,
                  selector: str | None = None, cover: bool | None = None,
-                 force_route: str | None = None, detail_mode: str | None = None) -> dict:
+                 force_route: str | None = None, detail_mode: str | None = None,
+                 static_only: bool = False) -> dict:
     """抓取一个 URL 的元数据；全部抓取失败时仅保留 URL，标题留空供手动补充。
 
     selector：按站点覆盖详情选择器（空/None 用默认 DETAIL_SELECTOR）——
@@ -345,20 +378,32 @@ def get_metadata(url: str, timeout: int = 20, proxy: str | None = None,
       "tags"=扁平标签链（extract_tags：**每个匹配元素本身就是一个标签**，
       如 B 站 .tag-panel .tag-link）。tags 模式**没有默认选择器**：留空一律
       详情为空——绝不拿 .space-y-2 > * 的行结构硬套标签链。
+      "og"=OG 快速模式：纯静态抓取（fetch_page(static_only=True)，不起浏览器、
+      不预带 Cookie）、只解析 <head> 里的 og:title/og:image，并跳过正文详情
+      解析。**通用、不含任何域名特化**——任何把 og 标签写在静态 HTML 里的站点
+      （含 YouTube）都受益，且比「整页+浏览器」明显更快。
+    static_only：强制纯静态抓取（通常由 detail_mode="og" 内部置位，也可由调用方直
+      接传，用于只需标题/封面的轻量场景）。
     """
     meta = {"url": url, "title": "", "thumbnail": "", "favicon": "", "success": False, "details": []}
-    response = fetch_page(url, timeout=timeout, proxy=proxy, force_route=force_route)
+    # OG 快速模式 → 强制纯静态抓取（不起浏览器、不预带/不写 Cookie）
+    if detail_mode == "og":
+        static_only = True
+    response = fetch_page(url, timeout=timeout, proxy=proxy,
+                          force_route=force_route, static_only=static_only)
     if response is None:
         return meta
     base_url = getattr(response, "url", None) or url
     meta.update(extract_metadata(response, base_url))
-    try:
-        if detail_mode == "tags":
-            meta["details"] = extract_tags(response.css(selector), base_url) if selector else []
-        else:
-            meta["details"] = extract_fields(response.css(selector or DETAIL_SELECTOR))
-    except Exception:  # 解析任意 HTML 时个别页面可能出错（含非法选择器），不影响主元数据
-        meta["details"] = []
+    # OG 模式只抓标题+封面，正文详情一律不解析（浏览器之外省下的第二笔开销）
+    if detail_mode != "og":
+        try:
+            if detail_mode == "tags":
+                meta["details"] = extract_tags(response.css(selector), base_url) if selector else []
+            else:
+                meta["details"] = extract_fields(response.css(selector or DETAIL_SELECTOR))
+        except Exception:  # 解析任意 HTML 时个别页面可能出错（含非法选择器），不影响主元数据
+            meta["details"] = []
     if cover is False:
         meta["thumbnail"] = ""
     elif cover is True and meta.get("favicon"):
