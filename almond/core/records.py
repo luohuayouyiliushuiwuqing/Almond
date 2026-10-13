@@ -62,10 +62,21 @@ def count_records() -> int:
         return conn.execute("SELECT count(*) FROM records").fetchone()[0]
 
 
-def list_records() -> list[dict]:
-    """全部记录，按插入顺序。标签用一次 JOIN 取，避免 N+1。"""
+def list_records(limit: int | None = None, offset: int = 0) -> list[dict]:
+    """全部记录（或分页片段），按插入顺序。标签用一次 JOIN 取，避免 N+1。
+
+    limit 为 None → 返回全量（兼容旧调用 / 切库 / 子进程读取）；
+    否则返回 [offset, offset+limit) 的片段，供前端分页拉取（4000 条量级避免一次性
+    把整张表与全部标签塞进一个 HTTP 响应）。
+    """
     with db.conn() as conn:
-        rows = conn.execute("SELECT * FROM records ORDER BY rowid").fetchall()
+        if limit is None:
+            rows = conn.execute("SELECT * FROM records ORDER BY rowid").fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM records ORDER BY rowid LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
         tag_map = _all_tags_map(conn)
         return [_row_to_record(row, tag_map.get(row["url"], [])) for row in rows]
 

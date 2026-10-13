@@ -5,17 +5,37 @@ import { MIN_GROUP, hostOf, rootDomain, setStatus, state } from "./state.js";
 
 /* ---------- 数据加载与渲染 ---------- */
 
+/* 分页拉取：每页 500 条，逐页累加到 state.records（全部到齐后 state.records 仍是
+   完整集合，侧边栏计数 / 分组 / 域名子页统计等逻辑零改动）。首屏先上第一页，
+   其余页面后台补齐，避免 4000 条一次性塞满一个 HTTP 响应与内存峰值。 */
+const PAGE = 500;
+
 export async function loadRecords() {
+  state.records = [];
   try {
-    const data = await apiGet("/api/records");
-    if (data.error) { // 服务端异常（如存储目录不存在）：原样提示
-      setStatus("加载失败：" + data.error, "err");
-      return;
+    let offset = 0;
+    let first = true;
+    let total = 0;
+    while (true) {
+      const data = await apiGet(`/api/records?offset=${offset}&limit=${PAGE}`);
+      if (data.error) { // 服务端异常（如存储目录不存在）：原样提示
+        setStatus("加载失败：" + data.error, "err");
+        return;
+      }
+      if (typeof data.epoch === "number") state.storageEpoch = data.epoch;   // 抓取请求要带的纪元
+      const items = data.items ?? data.records ?? [];
+      state.records.push(...items);
+      total = typeof data.total === "number" ? data.total : state.records.length;
+      if (first) {
+        emit("render");          // 首屏即时上屏，后续页面后台补齐
+        setStatus(`共 ${total} 条`);
+        first = false;
+      }
+      if (!data.has_more) break;
+      offset += PAGE;
     }
-    state.records = data.records || [];
-    if (typeof data.epoch === "number") state.storageEpoch = data.epoch;   // 抓取请求要带的纪元
-    emit("render");
-    setStatus(`共 ${state.records.length} 条`);
+    setStatus(`共 ${total} 条`);
+    emit("render");              // 全量到齐：侧栏计数 / 分组口径最终准确
   } catch (e) {
     setStatus("加载失败：" + e.message, "err");
   }

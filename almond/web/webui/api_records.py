@@ -1,7 +1,7 @@
 """/api/records*、/api/record*、/api/tag* —— 记录与标签的读写入口。"""
 
 from almond.core.records import (
-    add_tag_to_record, create_tag, delete_record, delete_tag,
+    add_tag_to_record, count_records, create_tag, delete_record, delete_tag,
     insert_quick_records, list_pending_urls, list_records, list_tags,
     remove_tag_from_record, set_title,
 )
@@ -9,11 +9,34 @@ from almond.core.storage import storage_epoch
 from almond.web.webui.api_util import require_fields, send_json
 
 
+def _int(v) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
 def list_all(h, qs: dict, body: dict) -> None:
-    """GET /api/records：全部记录 + epoch（前端开抓前要带上）。
+    """GET /api/records：记录 + epoch（前端开抓前要带上）。
 
     epoch 一并返回：页面加载与切库后的 loadRecords 都会顺带刷新。
+
+    带 `?limit=&offset=` 时分页返回 {"items","total","has_more","epoch"}，
+    供前端按需分页拉取（4000 条量级不一次性塞满一个响应）；
+    不带 limit 时保持旧响应 {"records","epoch"}，兼容其它调用方。
     """
+    limit = _int((qs.get("limit") or [""])[0])
+    offset = max(0, _int((qs.get("offset") or [""])[0]))
+    if limit > 0:
+        items = list_records(limit, offset)
+        total = count_records()
+        send_json(h, {
+            "items": items,
+            "total": total,
+            "has_more": offset + limit < total,
+            "epoch": storage_epoch(),
+        })
+        return
     send_json(h, {"records": list_records(), "epoch": storage_epoch()})
 
 
