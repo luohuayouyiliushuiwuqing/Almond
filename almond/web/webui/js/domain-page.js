@@ -18,7 +18,9 @@ import { matchesFilter, matchesTag } from "./records.js";
 import { $, el, state } from "./state.js";
 
 const HASH_PREFIX = "#/domain/";
-const DEFAULT_FIELDS = ["url", "tags", "details"];
+/* 列表视图默认展示的附加段（标题恒显）。曾经的「路径」（url）于 2026-10-13 移除：
+   用户明确不需要显示链接路径，勾选入口与默认值一并删除，存量 prefs 里的 url 键已清理 */
+const DEFAULT_FIELDS = ["tags", "details"];
 let settingsOpen = false;     // 设置面板开合（跨 render 保持）
 
 /* ---------- 路由 ---------- */
@@ -239,10 +241,10 @@ function buildToolbar(domain, prefs) {
   });
   bar.appendChild(sort);
 
-  /* 展示字段：只在列表视图有意义（卡片不显示路径/详情摘要）。
-     标题恒显，其余三段可关（改动即入库，下次进这个域名还是这套） */
+  /* 展示字段：只在列表视图有意义（卡片不显示标签/详情摘要）。
+     标题恒显，其余两段可关（改动即入库，下次进这个域名还是这套） */
   if (prefs.view === "list") {
-    for (const [key, labelText] of [["url", "路径"], ["tags", "标签"], ["details", "详情摘要"]]) {
+    for (const [key, labelText] of [["tags", "标签"], ["details", "详情摘要"]]) {
       const label = el("label", "dp-field-toggle");
       const cb = el("input");
       cb.type = "checkbox";
@@ -278,10 +280,6 @@ function buildToolbar(domain, prefs) {
 
 /* ---------- 记录行 ---------- */
 
-function prettyPath(url) {
-  return url.replace(/^https?:\/\/[^/]+/, "") || "/";
-}
-
 function buildRow(record, prefs) {
   const row = el("div", "dp-row");
   row.dataset.url = record.url;
@@ -304,7 +302,6 @@ function buildRow(record, prefs) {
   main.appendChild(link);
 
   const meta = el("div", "dp-meta");
-  if (prefs.fields.includes("url")) meta.appendChild(el("span", "dp-path", prettyPath(record.url)));
   if (prefs.fields.includes("tags") && record.tags && record.tags.length) {
     const tags = el("span", "dp-tags");
     tags.append(...makeTagBadges(record.tags));
