@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Almond 看板前端（React + Vite 试水）：域名设置页迁移验证",
+  "description": "Almond 看板前端（React 18 + Vite）：Raindrop 风格书签看板",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

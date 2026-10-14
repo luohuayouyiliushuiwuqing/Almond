@@ -19,6 +19,11 @@
 ```
 Almond/
 ├── pyproject.toml         # 打包配置：依赖来源、控制台入口
+├── frontend/              # 前端（React 18 + Vite，需构建）
+│   ├── index.html         # SPA 入口 HTML（标题等）
+│   ├── vite.config.js     # Vite 配置：base '/app/'
+│   ├── package.json       # 前端依赖与脚本（dev / build / preview）
+│   └── src/               # 源码：App.jsx + 组件 + store.js + 样式
 ├── almond/               # Python 包（绝对 import，无 sys.path hack）
 │   ├── core/              # 与界面无关的核心逻辑
 │   │   ├── fetcher.py     # 核心：三级降级抓取 + 元数据/详情提取
@@ -30,9 +35,9 @@ Almond/
 │       ├── webui/         # 主界面：Raindrop 看板（默认 0.0.0.0:4000）
 │       │   ├── server.py  # 路由分发 + REST API
 │       │   ├── staticfiles.py / imgproxy.py / fsbrowse.py
-│       │   │              # 静态文件解析 / 图片代抓 / 目录浏览（都不碰 socket）
-│       │   ├── index.html / style.css
-│       │   └── js/        # 15 个原生 ES 模块（无构建步骤），入口 main.js
+│       │   │              # 静态文件解析 / 图片代抓 / 目录浏览（都不碰 socket）、
+│       │   │              # 并直接 serve 前端构建产物 dist/（`/` 为 SPA 入口，`/app` 挂资源）
+│       │   └── dist/      # Vite 构建产物（前端 build 后生成，被后端直接 serve，已纳入版本控制）
 │       └── demo/          # 独立演示：CSS 选择器试验台（端口 8765）
 │           ├── server.py  # 静态托管 + /api/fetch（输入网址按选择器提取）
 │           └── index.html / style.css / app.js / fixture.html
@@ -59,6 +64,29 @@ patchright install chromium
 #    --no-build-isolation --no-index 全程不联网）
 pip install -e . --no-deps --no-build-isolation --no-index
 ```
+
+## 前端构建（React + Vite）
+
+前端已从原生 ES 模块（无构建步骤）迁移到 **React 18 + Vite**，源码在 `frontend/`，
+构建后由后端 `almond-webui` / `python -m almond.web.webui.server` 直接托管，改完前端必须重新构建。
+
+```bash
+cd frontend
+
+# 1. 首次安装前端依赖（Node ≥ 18）
+npm install
+
+# 2. 开发模式（热更新，独立 Vite dev server，默认 http://localhost:5173）
+#    dev 阶段用 Vite 反代 /api 免 CORS；后端跑在别的端口时用环境变量指定：
+VITE_API_TARGET=http://127.0.0.1:8888 npm run dev
+
+# 3. 构建生产包（输出到 almond/web/webui/dist/，后端直接 serve）
+npm run build
+```
+
+- 构建出的 SPA 由后端托管：`/` 返回 `dist/index.html`，静态资源挂在 `/app/*`（见 `vite.config.js` 的 `base: '/app/'`）；未知且非 `/api/*` 的路径回落到 SPA 入口，支持 `#/domain/xxx` 刷新 / 分享链接直达。
+- 改完 `frontend/src/` 后需 `npm run build` 才能看到效果；后端每次请求从磁盘读 `dist/`，**无需重启后端**。
+- 前端运行时不依赖任何 npm 全局包；构建产物已纳入版本控制（`.gitignore` 放行 `almond/web/webui/dist/`）。
 
 ## 使用
 
