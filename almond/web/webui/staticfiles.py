@@ -22,9 +22,6 @@ CONTENT_TYPES = {
     ".map": "application/json; charset=utf-8",
 }
 
-_ALLOWED_DIRS = {"js"}  # 允许的二级目录白名单
-
-
 def resolve_static(path: str) -> Path | None:
     """URL 路径 → ROOT 下的静态文件；越界/未知后缀/不存在一律 None（调用方回 404）。
 
@@ -43,21 +40,20 @@ def resolve_static(path: str) -> Path | None:
         return None  # 旧版 vanilla 样式已随框架迁移删除
     if path.startswith("/js/") or path in ("/favicon.ico",):
         return None  # 旧版 vanilla 脚本已删除；favicon 回退 404
-    else:
-        if "\\" in path or ".." in path:      # 裸 .. 与反斜杠直接拒
-            return None
-        rel = path[1:] if path.startswith("/") else path
-        parts = rel.split("/")
-        if len(parts) > 2 or any(p in ("", ".", "..") for p in parts):
-            return None                        # 深度 >2、空段、`.`/`..` 段
-        if len(parts) == 2 and parts[0] not in _ALLOWED_DIRS:
-            return None                        # 二级目录只放行 js/
-    candidate = ROOT / rel
-    if candidate.suffix not in CONTENT_TYPES or not candidate.is_file():
-        return None                            # 未知后缀 / 不存在
-    if not candidate.resolve().is_relative_to(ROOT.resolve()):
-        return None                            # 符号链接逃逸的双保险
-    return candidate
+    # SPA 回退：末段扩展名不在 CONTENT_TYPES 里的「页面路径」（如 /foo、
+    # /domain/github.com，或 history 风格路由）一律返回 React 入口，由前端 hash
+    # 路由接管——避免用户误访这类路径时看到裸 404。真正带资源后缀（.js/.css/...）
+    # 且缺失的文件仍 404，避免掩盖资源加载错误；/api/* 不在此回退范围，交给 API
+    # 路由按原样处理（未知接口仍 404）。
+    tail = path.split("/")[-1]
+    if (
+        not path.startswith("/api/")
+        and "\\" not in path
+        and ".." not in path
+        and Path(tail).suffix not in CONTENT_TYPES
+    ):
+        return _resolve_app("/")
+    return None
 
 
 def _resolve_app(path: str) -> Path | None:
