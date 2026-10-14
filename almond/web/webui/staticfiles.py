@@ -13,6 +13,13 @@ CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
+    ".mjs": "text/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".map": "application/json; charset=utf-8",
 }
 
 _ALLOWED_DIRS = {"js"}  # 允许的二级目录白名单
@@ -24,8 +31,18 @@ def resolve_static(path: str) -> Path | None:
     不做 percent-decode：`/js/%2e%2e/server.py` 里的 `%2e%2e` 既不会撞上字面 `..`
     判断，磁盘上也不存在这个文件名，最终 is_file() 为假 → 404。
     """
+    # React 应用挂载：/app → 构建产物 dist/（SPA，未知路径回退 index.html）
+    if path == "/app" or path.startswith("/app/"):
+        return _resolve_app(path)
+    # 站点根：直接返回 React SPA 的入口（dist/index.html）。
+    # 前端的资源基址是 /app/（见 vite.config.js base），因此 /app/assets/* 由上面的
+    # /app 挂载解析；这里只负责把「打开根路径」这件事指到构建产物上。
     if path in ("/", "/index.html"):
-        rel = "index.html"
+        return _resolve_app("/")
+    if path in ("/style.css",):
+        return None  # 旧版 vanilla 样式已随框架迁移删除
+    if path.startswith("/js/") or path in ("/favicon.ico",):
+        return None  # 旧版 vanilla 脚本已删除；favicon 回退 404
     else:
         if "\\" in path or ".." in path:      # 裸 .. 与反斜杠直接拒
             return None
@@ -43,6 +60,36 @@ def resolve_static(path: str) -> Path | None:
     return candidate
 
 
+def _resolve_app(path: str) -> Path | None:
+    """React 应用（Vite 构建到 dist/）挂载点 /app 的解析。
+
+    - /app 或 /app/ → dist/index.html
+    - /app/assets/<hash>.js 等多级资源直接命中
+    - 其余无后缀路径（如客户端路由 /app/xxx）回退到 index.html（SPA）
+    """
+    dist = ROOT / "dist"
+    sub = path[len("/app"):]
+    sub = sub[1:] if sub.startswith("/") else sub
+    if "\\" in sub or ".." in sub:
+        return None
+    if not sub:
+        candidate = dist / "index.html"
+    else:
+        parts = sub.split("/")
+        if any(p in ("", ".", "..") for p in parts):
+            return None
+        candidate = dist.joinpath(*parts)
+    if not candidate.is_file():
+        # SPA 回退：仅对无后缀的「页面路径」回退 index.html；明确资源（.js/.css）缺失即 404
+        if not candidate.suffix:
+            candidate = dist / "index.html"
+        if not candidate.is_file():
+            return None
+    if not candidate.resolve().is_relative_to(dist.resolve()):
+        return None
+    return candidate
+
+
 def serve(h, url_path: str) -> None:
     """静态文件响应：`resolve_static` 命中就写 200，未命中回 404（响应写入也归本模块）。"""
     file_path = resolve_static(url_path)
@@ -51,7 +98,7 @@ def serve(h, url_path: str) -> None:
         return
     body = file_path.read_bytes()
     h.send_response(200)
-    h.send_header("Content-Type", CONTENT_TYPES[file_path.suffix])
+    h.send_header("Content-Type", CONTENT_TYPES.get(file_path.suffix, "application/octet-stream"))
     h.send_header("Content-Length", str(len(body)))
     # 静态文件禁缓存：改完代码浏览器总能拿到新版（否则旧 tab 会一直跑旧 JS）
     h.send_header("Cache-Control", "no-store")

@@ -1,0 +1,10 @@
+/* React 版微调：vanilla 侧栏靠 JS「更多」溢出测量 + 文档滚轮转发实现固定不滚，
+   React 没移植这套机制，直接允许侧栏溢出时自身滚动，避免域名/标签多时底部条目被裁且无法访问。 */
+.sidebar { overflow-y: auto; }
+.sidebar.collapsed { overflow: hidden; }
+
+/* 子页根容器占满滚动区（与看板同高），滚动交给 .board-wrap */
+.domain-page { min-height: 0; }
+
+/* 弹窗里「浏览」目录按钮与保存按钮排一行时对齐 */
+.db-modal .proxy-row .btn-ghost { flex: 0 0 auto; white-space: nowrap; }

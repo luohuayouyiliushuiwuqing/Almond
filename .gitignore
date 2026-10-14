@@ -11,9 +11,18 @@ dist/
 build/
 *.egg-info/
 
+# 例外：React 前端构建产物需随仓库走（后端直接 serve almond/web/webui/dist/）
+!almond/web/webui/dist/
+
 # 图片本地缓存（删除整个 cache/ 目录即可强制刷新）
 cache/
 
 # 浏览器插件打包产物（.pem 是签名私钥，绝不能入库）
 extension.crx
 extension.pem
+
+# 前端依赖（React + Vite）
+node_modules/
+
+# 项目本地数据（不随仓库走）
+.workbuddy/

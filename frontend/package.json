@@ -1,0 +1,21 @@
+{
+  "name": "almond-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Almond 看板前端（React + Vite 试水）：域名设置页迁移验证",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@esbuild/win32-x64": "^0.28.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11"
+  }
+}
