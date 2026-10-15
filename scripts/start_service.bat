@@ -20,6 +20,8 @@ REM ============================================================
 REM ---- 定位仓库根（脚本在 scripts\ 下，根即上级目录）----
 set "ROOT=%~dp0.."
 cd /d "%ROOT%" || ( echo [X] 无法切到仓库根目录 & pause & exit /b 1 )
+REM 规范化 ROOT 为绝对路径（去掉 ..，避免后续拼接歧义）
+set "ROOT=%CD%"
 
 REM ---- 选择 python（优先 ximages 环境，否则 PATH 上的 python）----
 set "PY="
@@ -60,17 +62,28 @@ if not exist "%ROOT%\almond\webui\dist\index.html" (
     call :build
 )
 
-REM ---- 组装 server 参数：缺省补 127.0.0.1:4000 ----
+REM ---- 组装 server 参数：缺省补 127.0.0.1 + 探测空闲端口 ----
 set "SRV_ARGS="
 set "T=!ARGS!"
 if "!T:--host=!"=="!T!" set "SRV_ARGS=!SRV_ARGS! --host 127.0.0.1"
-if "!T:--port=!"=="!T!" set "SRV_ARGS=!SRV_ARGS! --port 4000"
+if "!T:--port=!"=="!T!" (
+    REM 启动前先探测一个确定空闲的端口，显式传给 server，避免被二次跳端口搞混
+    set "PORT="
+    for /f "delims=" %%P in ('"%PY%" "%ROOT%\scripts\_free_port.py" 2^>nul') do set "PORT=%%P"
+    if not defined PORT set "PORT=4000"
+    set "SRV_ARGS=!SRV_ARGS! --port !PORT!"
+)
 set "SRV_ARGS=!SRV_ARGS! !ARGS!"
 
 echo.
 echo [*] 启动 Almond 看板：
 echo     %PY% -m almond.webui.server!SRV_ARGS!
-echo     本机访问：http://127.0.0.1:4000/app/   （端口被占会自动跳，以日志实际端口为准）
+if defined PORT (
+    echo     本机访问：http://127.0.0.1:!PORT!/app/
+    echo     （脚本已选空闲端口，日志中 "Serving on" 的端口与此一致）
+) else (
+    echo     本机访问：http://127.0.0.1:^<你用 --port 指定的端口^>/app/
+)
 echo.
 "%PY%" -m almond.webui.server !SRV_ARGS!
 echo.
