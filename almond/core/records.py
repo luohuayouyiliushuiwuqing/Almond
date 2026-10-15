@@ -39,6 +39,9 @@ def _row_to_record(row: sqlite3.Row, tags: list[dict]) -> dict:
         "domain": root_domain(row["url"]),
         "tags": tags,
         "fetched": bool(row["fetched"]),
+        # 创建时间戳（本地时间，'YYYY-MM-DD HH:MM:SS'）；老库历史记录为 NULL（未知）。
+        # 只读不写：任何更新路径都不改写，保证「导入/新增当天打的时间戳不可变」。
+        "created_at": row["created_at"],
     }
 
 
@@ -71,10 +74,12 @@ def list_records(limit: int | None = None, offset: int = 0) -> list[dict]:
     """
     with db.conn() as conn:
         if limit is None:
-            rows = conn.execute("SELECT * FROM records ORDER BY rowid").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM records ORDER BY created_at DESC, rowid DESC"
+            ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM records ORDER BY rowid LIMIT ? OFFSET ?",
+                "SELECT * FROM records ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?",
                 (limit, offset),
             ).fetchall()
         tag_map = _all_tags_map(conn)
@@ -109,12 +114,12 @@ def upsert_record(new: dict) -> dict:
             return _row_to_record(row, _tags_for(conn, new["url"]))
         title = new.get("title", "") or (old["title"] if old is not None else "")
         conn.execute(
-            "INSERT INTO records (url, title, thumbnail, favicon, success, details, fetched) "
-            "VALUES (?, ?, ?, ?, ?, ?, 1) "
+            "INSERT INTO records (url, title, thumbnail, favicon, success, details, fetched, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1, datetime('now','localtime')) "
             "ON CONFLICT(url) DO UPDATE SET title = excluded.title, "
             "thumbnail = excluded.thumbnail, favicon = excluded.favicon, "
             "success = excluded.success, details = excluded.details, "
-            "fetched = 1",
+            "fetched = 1",  # 注意：UPDATE 分支不碰 created_at —— 时间戳写定后不可变
             (
                 new["url"],
                 title,
@@ -147,10 +152,14 @@ def upsert_record_if_epoch(new: dict, epoch: int) -> dict | None:
 
 
 def insert_quick_records(items: list[dict]) -> dict:
-    """快照批量入库：**不联网**，直接写入已有元数据，`fetched=0`。
+    """快照批量入库：**不联网**，直接写入已有元数据。
 
-    items: [{url, title?, thumbnail?, favicon?, tags?: [str]}]
-    单事务处理，已存在的 URL 跳过。返回 {inserted, skipped}。
+    items: [{url, title?, thumbnail?, favicon?, details?, tags?, captured?}]
+    - `captured=True`：元数据已由浏览器端（插件注入打开的页面）直接读到，
+      视为「已抓取」→ `fetched=1`，**不进补抓队列**，避免服务端二次抓取。
+    - 其余（仅 URL / 仅标题的导入）：`fetched=0`，留给看板按需补抓。
+    `details` 透传客户端给的结构化字段（如 og:description / og:site_name），
+    缺省为空列表。单事务处理，已存在的 URL 跳过。返回 {inserted, skipped}。
     """
     inserted = skipped = 0
     with db.conn() as conn:
@@ -161,15 +170,23 @@ def insert_quick_records(items: list[dict]) -> dict:
             if conn.execute("SELECT 1 FROM records WHERE url = ?", (url,)).fetchone():
                 skipped += 1
                 continue
-            # success=1：HTML 已提供标题/封面，元数据有效（details 留待按需补抓）
+            # 客户端已从打开的页面直接拿到 OG 元数据 → 视为已抓取，跳过服务端补抓
+            captured = bool(item.get("captured"))
+            details = item.get("details")
+            if not isinstance(details, list):
+                details = []
+            # success=1：客户端已提供标题/封面，元数据有效；
+            # created_at = 导入当天（datetime('now','localtime')），后续任何更新都不改写 → 不可变
             conn.execute(
-                "INSERT INTO records (url, title, thumbnail, favicon, success, details, fetched) "
-                "VALUES (?, ?, ?, ?, 1, '[]', 0)",
+                "INSERT INTO records (url, title, thumbnail, favicon, success, details, fetched, created_at) "
+                "VALUES (?, ?, ?, ?, 1, ?, ?, datetime('now','localtime'))",
                 (
                     url,
                     (item.get("title") or "").strip(),
                     (item.get("thumbnail") or "").strip(),
                     (item.get("favicon") or "").strip(),
+                    json.dumps(details, ensure_ascii=False),
+                    1 if captured else 0,
                 ),
             )
             domain = root_domain(url)

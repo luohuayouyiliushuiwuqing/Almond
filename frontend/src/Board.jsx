@@ -42,7 +42,23 @@ export default function Board() {
     domainMap.clear()
     for (const [d, recs] of major) domainMap.set(d, recs)
   }
-  const sorted = [...domainMap.entries()].sort((a, b) => b[1].length - a[1].length)
+  // 按组内最新时间戳排序（最近有更新的域名组排最上面），NULL 时间戳（老数据）沉底；
+  // 同最新时间再按组内数量降序。组内卡片保持 created_at 倒序（见 list_records）。
+  const newestTs = (recs) => {
+    let max = null
+    for (const r of recs) {
+      const t = r.created_at
+      if (t && (max === null || t > max)) max = t
+    }
+    return max
+  }
+  const sorted = [...domainMap.entries()].sort((a, b) => {
+    const ta = newestTs(a[1]), tb = newestTs(b[1])
+    if (ta === tb) return b[1].length - a[1].length
+    if (!ta) return 1   // a 无时间戳 → 沉底
+    if (!tb) return -1  // b 无时间戳 → 沉底
+    return tb > ta ? 1 : -1
+  })
 
   if (sorted.length <= 1 && visible.length <= 20) {
     return (
