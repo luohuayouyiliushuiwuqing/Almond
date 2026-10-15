@@ -1,7 +1,7 @@
 import { useRef } from 'react'
 import {
   useStore, addUrl, setStatus, handleBackfillClick, enqueueBackfill,
-  loadRecords, setFilter, getVisibleRecords,
+  loadRecords, setFilter, getVisibleRecords, toggleSidebar,
 } from './store.js'
 import { openModal } from './ui.js'
 import { apiPost } from './api.js'
@@ -103,7 +103,7 @@ export default function Toolbar() {
 
   return (
     <header className="toolbar">
-      <button className="btn-icon" title="收起/展开侧边栏" onClick={() => document.querySelector('.sidebar')?.classList.toggle('collapsed')}>
+      <button className="btn-icon" title="收起/展开侧边栏" onClick={toggleSidebar}>
         ☰
       </button>
       <div className="brand">

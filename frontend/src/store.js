@@ -29,7 +29,7 @@ export const store = {
   detailTarget: null,
   renameTarget: null,
   tagTargets: null,
-  sidebarExpanded: false,
+  sidebarCollapsed: false,
 }
 
 let version = 0
@@ -56,6 +56,13 @@ export const MIN_GROUP = 10
 
 export function setStatus(text, kind) {
   update({ status: { text, kind: kind || '' } })
+}
+
+/* 侧栏收起态必须由 store 持有：Toolbar 原先直接 classList.toggle('.sidebar')，
+   任何一次重渲染（勾选、后台补抓回写、切库…）都会把 React 算出的 className 盖回去，
+   收起状态说没就没。 */
+export function toggleSidebar() {
+  update({ sidebarCollapsed: !store.sidebarCollapsed })
 }
 
 export function hostOf(url) {

@@ -37,7 +37,7 @@ export default function Sidebar() {
   const allActive = !s.domainPage && s.selectedDomain === null && s.selectedTag === null
 
   return (
-    <aside className="sidebar">
+    <aside className={'sidebar' + (s.sidebarCollapsed ? ' collapsed' : '')}>
       <div
         className={'sidebar-item' + (allActive ? ' active' : '')}
         onClick={() => filterTo(() => { s.selectedDomain = null; s.selectedTag = null })}

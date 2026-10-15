@@ -13,6 +13,8 @@ export default function StoragePanel() {
   const [history, setHistory] = useState([])
   const [input, setInput] = useState('')
   const [fs, setFs] = useState({ path: '', parent: null, entries: [] })
+  const [pathBox, setPathBox] = useState('')
+  const [fsErr, setFsErr] = useState('')
   const [pickerOpen, setPickerOpen] = useState(false)
   const [saving, setSaving] = useState(false)
 
@@ -25,9 +27,14 @@ export default function StoragePanel() {
 
   const openFs = async (path) => {
     const d = await loadFs(path)
+    setPickerOpen(true)
     if (d && d.ok) {
       setFs(d)
-      setPickerOpen(true)
+      setPathBox(d.path)
+      setFsErr('')
+    } else {
+      // 手输/粘贴的路径打不开时必须出声：以前静默失败，看起来像「按钮没反应」
+      setFsErr((d && d.error) || '无法打开该目录')
     }
   }
 
@@ -85,28 +92,38 @@ export default function StoragePanel() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') onSave() }}
             />
-            <button className="btn-ghost" onClick={() => openFs(fs.path || (dir && dir.path) || '')}>浏览</button>
+            <button className="btn-ghost" onClick={() => openFs(input.trim() || fs.path || (dir && dir.path) || '')}>浏览</button>
           </div>
         </div>
 
         {pickerOpen && (
           <div className="fs-picker">
             <div className="fs-nav">
-              <button className="btn-ghost" disabled={!fs.parent} onClick={() => openFs(fs.parent)}>↑ 上级</button>
-              <span className="fs-path">{fs.path}</span>
+              {/* 盘符根 / POSIX 根的 parent 是空串（=「回到顶层列表」），不是 null：
+                  用 !fs.parent 判禁用会让 C:\ 那一层永远点上不去，Windows 就换不了盘 */}
+              <button className="btn-ghost" disabled={!fs.path} onClick={() => openFs(fs.parent)}>↑ 上级</button>
+              <input
+                className="input fs-pathbox"
+                placeholder="粘贴或输入路径后回车，如 D:\\ 或 ~"
+                value={pathBox}
+                onChange={(e) => setPathBox(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') openFs(pathBox.trim()) }}
+              />
+              <button className="btn-ghost" onClick={() => openFs(pathBox.trim())}>定位</button>
             </div>
+            {fsErr && <div className="fs-error">{fsErr}</div>}
             <div className="fs-list">
               {fs.entries && fs.entries.length ? (
                 fs.entries.map((name) => (
                   <button className="fs-item" key={name} onClick={() => openFs(fsJoin(fs.path, name))}>{name}</button>
                 ))
               ) : (
-                <div className="fs-empty">（无子目录）</div>
+                <div className="fs-empty">{fs.path ? '（无子目录）' : '（顶层：点选一个盘符 / 根目录）'}</div>
               )}
             </div>
             <div className="fs-actions">
-              <span className="fs-hint">点子目录进入，选好后点「选这个」</span>
-              <button className="btn-primary" onClick={onPick}>选这个</button>
+              <span className="fs-hint">路径框回车即可跳到任意目录；「选这个」取当前这一层</span>
+              <button className="btn-primary" disabled={!fs.path} onClick={onPick}>选这个</button>
             </div>
           </div>
         )}

@@ -34,6 +34,19 @@ body {
   font: 14px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
 }
 
+/* 高度链：body(100vh) → #root → .app → main 必须一环不断。body 的 flex 子项是
+   React 挂的 #root 而不是 .app，这两环没约束高度的话 main 会被卡片撑到几万 px，
+   .board-wrap / .sidebar 就失去滚动容器身份、退化成整页滚动（侧栏跟着页面一起滚
+   正是这个原因）。链通了之后滚轮天然只滚指针下方那个容器，不需要 JS 转发。 */
+#root,
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+#root { flex: 1; }
+.app { flex: 1; }
+
 /* ---------- 工具栏 ---------- */
 .toolbar {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -772,14 +785,17 @@ main {
 .test-row { cursor: pointer; }
 .test-row:hover { border-color: var(--accent); background: var(--accent-weak); }
 .proxy-side .rule-pattern { min-width: 0; flex: 1; }
-/* 右扇区：域名路由列表限高；整栏内容超高时右卡片自己滚 */
+/* 右扇区：整栏内容超高时右卡片自己滚 */
 .proxy-main { overflow: auto; }
-.proxy-scroll { max-height: 250px; overflow-y: auto; }
-#domainRuleList .rule-pattern { min-width: 0; flex: 1; }
-/* 域名路由行内的路由下拉：固定宽度（覆盖 .modal .input 的 100%） */
-.proxy-panel .rule-need { flex: 0 0 74px; width: 74px; padding-right: 4px; }
+/* 域名路由行：域名吃掉剩余宽度，「取消」贴右沿（与左栏实测行同构，不再堆在行中间） */
+.route-row .rule-pattern { min-width: 0; flex: 1 1 0; }
+/* 路由下拉：实测固有宽度 80px（含原生箭头），给到 84px —— 74px 时「用代理」被箭头压掉一个字 */
+.proxy-panel .rule-need { flex: 0 0 84px; width: 84px; padding-right: 4px; }
 .proxy-add { margin-top: 2px; }
 .proxy-add .rule-select { flex: 0 0 84px; }
+/* 选择域名下拉：必须随行宽伸缩（选项里最长域名固有 148px，固定 84px 必然截断）。
+   与上一条同特异性，靠源顺序覆盖 .rule-select 的固定值 */
+.proxy-add .rule-domain { flex: 1 1 0; min-width: 0; width: auto; }
 /* 实测徽标（只读） */
 .test-badge {
   flex: none;
@@ -977,10 +993,17 @@ a.detail-chip:hover { border-color: var(--accent); color: var(--accent); backgro
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
-.fs-path {
+/* 路径框：直接粘任意路径回车跳转，省掉一级级点；占满导航条剩余宽度 */
+.fs-pathbox {
+  flex: 1 1 0; min-width: 0;
   font-family: ui-monospace, Consolas, monospace;
   font-size: 12px; color: var(--ink);
-  word-break: break-all;
+}
+.fs-error {
+  padding: 6px 10px;
+  font-size: 12px; color: var(--err);
+  background: #fef2f2;
+  border-bottom: 1px solid var(--border);
 }
 .fs-list { max-height: 260px; overflow-y: auto; padding: 6px; }
 .fs-item {

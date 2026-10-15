@@ -169,7 +169,7 @@ export default function ProxyPanel() {
               <label>域名路由（用户指定，覆盖全局）</label>
               <div className="rule-list">
                 {specified.map((d) => (
-                  <div className="rule-row" key={d.name}>
+                  <div className="rule-row route-row" key={d.name}>
                     <span
                       className="rule-pattern link"
                       title="点域名名：进入该域名子页"
