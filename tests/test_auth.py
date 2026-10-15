@@ -167,6 +167,27 @@ class TestLoopbackPolicy(unittest.TestCase):
         self.assertEqual(caught.exception.code, 2)
 
 
+class TestPortFallback(unittest.TestCase):
+    def test_busy_port_is_skipped(self):
+        """4000 被占时自己跳下一个，而不是抛 OSError 让人先去查谁占了端口。"""
+        blocker = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        try:
+            busy = blocker.server_address[1]
+            srv, got = server._bind("127.0.0.1", busy)
+            try:
+                self.assertEqual(got, busy + 1)
+                self.assertEqual(srv.server_address[1], busy + 1)
+            finally:
+                srv.server_close()
+        finally:
+            blocker.server_close()
+
+    def test_non_eaddrinuse_still_raises(self):
+        """跳端口只该吞「端口被占」；地址本身不合法时保留原始报错，别让人以为是端口问题。"""
+        with self.assertRaises(OSError):
+            server._bind("not-a-listen-address", 4000)
+
+
 class TestTokenSources(GateCase):
     def test_header_wins_over_stale_cookie(self):
         """两个凭证同时存在时不因 Cookie 过期而误拒（浏览器会照发旧 Cookie）。"""

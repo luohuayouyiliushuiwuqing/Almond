@@ -9,8 +9,10 @@
 
 用法：python -m almond.webui.server [--host 127.0.0.1] [--port 4000] [--token <值>]
      或安装后直接 almond-webui
+端口被占用时自动从 --port 起往后跳（最多 20 个）找空位，起不来的那个才是真错误。
 """
 
+import errno
 import multiprocessing
 import os
 import sys
@@ -112,6 +114,27 @@ def _is_loopback(host: str) -> bool:
     return host in ("127.0.0.1", "localhost", "::1") or host.startswith("127.")
 
 
+PORT_SCAN = 20   # 从 --port 起最多往后试几个端口
+
+
+def _bind(host: str, port: int):
+    """绑定服务，端口被占就往后跳，返回 (server, 实际端口)。
+
+    看板是「随时可能再起一个」的本机工具，撞 4000 是常态（上一个还没退干净、
+    或另一个库占着），不值得为此抛一整段 traceback 让人先去查谁占了。
+    只吞 EADDRINUSE：权限不足（<1024）之类的错跳端口也没用，原样抛出更好定位。
+    """
+    for p in range(port, port + PORT_SCAN):
+        try:
+            return ThreadingHTTPServer((host, p), Handler), p
+        except OSError as exc:
+            if exc.errno != errno.EADDRINUSE:
+                raise
+            logger.warning(f"端口 {p} 已被占用，试下一个")
+    logger.error(f"从 {port} 开始的 {PORT_SCAN} 个端口全被占用，放弃启动")
+    sys.exit(1)
+
+
 def main() -> None:
     # spawn 拉起抓取子进程时会重入本模块：freeze_support 让子进程在此短路退出，
     # 不会把 Web 服务再启动一遍（console 入口没有 __main__ 保护时尤其需要）
@@ -132,7 +155,7 @@ def main() -> None:
         sys.exit(2)
     auth.configure(token)
 
-    server = ThreadingHTTPServer((host, port), Handler)
+    server, port = _bind(host, port)
     logger.info(f"Web 看板已启动：http://{host}:{port}/")
     logger.info(f"本机访问：http://127.0.0.1:{port}/app/")
     if auth.enabled():
