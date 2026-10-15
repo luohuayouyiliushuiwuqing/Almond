@@ -2,7 +2,7 @@
 
 from almond.core import fetch_hints
 from almond.core.domains import list_domains, replace_domain, update_domain
-from almond.web.webui.api_util import send_json
+from almond.webui.api_util import send_json
 
 
 def domains(h, qs: dict, body: dict) -> None:

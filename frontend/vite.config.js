@@ -18,7 +18,7 @@ export default defineConfig({
   },
   build: {
     // 直接产出到 webui 的 dist/，配合 staticfiles.py 的 /app 挂载
-    outDir: '../almond/web/webui/dist',
+    outDir: '../almond/webui/dist',
     emptyOutDir: true,
   },
 })

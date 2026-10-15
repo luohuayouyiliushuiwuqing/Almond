@@ -1,8 +1,7 @@
 """webui 静态文件解析：URL 路径 → ROOT 下的真实文件。
 
-原来 `server.py` 用一张写死的 `STATIC_FILES` 白名单，每加一个文件都要改代码；
-前端拆成 `js/` 多个模块后改成按规则解析，放行范围仍然收得很紧：
-顶层 html/css/js，或白名单子目录（当前只有 `js/`）下的一层文件。
+前端是 React + Vite，构建产物落在同包 `dist/`（vite base 为 `/app/`）：
+`/` 与 `/app*` 都解析到 dist 里的文件，其余带资源后缀的路径一律 404。
 """
 
 from pathlib import Path
@@ -25,8 +24,8 @@ CONTENT_TYPES = {
 def resolve_static(path: str) -> Path | None:
     """URL 路径 → ROOT 下的静态文件；越界/未知后缀/不存在一律 None（调用方回 404）。
 
-    不做 percent-decode：`/js/%2e%2e/server.py` 里的 `%2e%2e` 既不会撞上字面 `..`
-    判断，磁盘上也不存在这个文件名，最终 is_file() 为假 → 404。
+    不做 percent-decode：编码后的 `..`（`%2e%2e`）既不会撞上字面 `..` 判断，磁盘上
+    也不存在这个文件名，最终 is_file() 为假 → 404。
     """
     # React 应用挂载：/app → 构建产物 dist/（SPA，未知路径回退 index.html）
     if path == "/app" or path.startswith("/app/"):
@@ -36,10 +35,6 @@ def resolve_static(path: str) -> Path | None:
     # /app 挂载解析；这里只负责把「打开根路径」这件事指到构建产物上。
     if path in ("/", "/index.html"):
         return _resolve_app("/")
-    if path in ("/style.css",):
-        return None  # 旧版 vanilla 样式已随框架迁移删除
-    if path.startswith("/js/") or path in ("/favicon.ico",):
-        return None  # 旧版 vanilla 脚本已删除；favicon 回退 404
     # SPA 回退：末段扩展名不在 CONTENT_TYPES 里的「页面路径」（如 /foo、
     # /domain/github.com，或 history 风格路由）一律返回 React 入口，由前端 hash
     # 路由接管——避免用户误访这类路径时看到裸 404。真正带资源后缀（.js/.css/...）

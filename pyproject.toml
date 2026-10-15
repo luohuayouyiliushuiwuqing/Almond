@@ -4,7 +4,7 @@
 #   和 pip 选项行（-i / -r），否则 PEP 508 校验会让构建失败。
 #
 # 安装：pip install -e . --no-deps --no-build-isolation --no-index   （环境已有依赖时，全程离线）
-# 入口：almond-webui / almond-demo，或免安装 python -m almond.web.webui.server
+# 入口：almond-webui，或免安装 python -m almond.webui.server
 
 [build-system]
 # setuptools>=64 才支持 PEP 660 editable 安装；本地已装 83.0.0
@@ -20,8 +20,7 @@ requires-python = ">=3.10"
 dynamic = ["dependencies"]
 
 [project.scripts]
-almond-webui = "almond.web.webui.server:main"
-almond-demo = "almond.web.demo.server:main"
+almond-webui = "almond.webui.server:main"
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }
@@ -33,7 +32,6 @@ include = ["almond", "almond.*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-# 静态页面与各自 server.py 同目录，随 wheel/sdist 一起分发
-# js/ 是子目录：package-data 的单个 * 不跨目录分隔符，必须显式写 js/*.js
-"almond.web.webui" = ["*.html", "*.css", "*.js", "js/*.js"]
-"almond.web.demo" = ["*.html", "*.css", "*.js"]
+# React 构建产物随后端同包分发，装到 site-packages 后 staticfiles 仍能找到 dist/
+# 子目录必须显式写出：package-data 的单个 * 不跨目录分隔符
+"almond.webui" = ["dist/*.html", "dist/*.ico", "dist/assets/*"]

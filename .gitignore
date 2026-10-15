@@ -11,8 +11,8 @@ dist/
 build/
 *.egg-info/
 
-# 例外：React 前端构建产物需随仓库走（后端直接 serve almond/web/webui/dist/）
-!almond/web/webui/dist/
+# 例外：React 前端构建产物需随仓库走（后端直接 serve almond/webui/dist/）
+!almond/webui/dist/
 
 # 图片本地缓存（删除整个 cache/ 目录即可强制刷新）
 cache/

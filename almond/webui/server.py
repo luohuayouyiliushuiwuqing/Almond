@@ -4,7 +4,7 @@
 每个资源的处理器住在同目录 `api_*.py` 里（ROUTES 字典注册，签名 `fn(h, qs, body)`）；
 静态文件由 `staticfiles.serve` 自解析。api_* **禁止 import 本模块**（防环）。
 
-用法：python -m almond.web.webui.server [--host 0.0.0.0] [--port 4000]   （在仓库根目录执行）
+用法：python -m almond.webui.server [--host 0.0.0.0] [--port 4000]   （在仓库根目录执行）
      或安装后直接 almond-webui
 """
 
@@ -15,9 +15,9 @@ from urllib.parse import parse_qs, urlparse
 
 from almond.core.log import logger
 from almond.core.proxy import REFRESH_INTERVAL, start_proxy_refresh
-from almond.web.webui import api_fetch, api_records, api_domains, api_proxy, api_storage
-from almond.web.webui import staticfiles
-from almond.web.webui.api_util import read_json, send_json
+from almond.webui import api_fetch, api_records, api_domains, api_proxy, api_storage
+from almond.webui import staticfiles
+from almond.webui.api_util import read_json, send_json
 
 # 路由表：(method, path) → handler(h, qs, body)；未命中的 GET 走静态文件，其余 404
 _ROUTES: dict = {}

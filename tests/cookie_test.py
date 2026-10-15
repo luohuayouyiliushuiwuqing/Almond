@@ -13,15 +13,15 @@
      日志双重判定）——对外部 Cookie 来说，这一步就是「能不能进入」的判定。
 
 用法：
-  python test/cookie_test.py https://example.com/login-required
-  python test/cookie_test.py https://your-site.com/page --proxy http://127.0.0.1:7897
-  python test/cookie_test.py https://your-site.com/page --fresh   # 先清掉存量 Cookie 再重抓
-  python test/cookie_test.py https://your-site.com/page --show-cookie   # 打印 Cookie 完整值
-  python test/cookie_test.py https://your-site.com/page --timeout 10
+  python tests/cookie_test.py https://example.com/login-required
+  python tests/cookie_test.py https://your-site.com/page --proxy http://127.0.0.1:7897
+  python tests/cookie_test.py https://your-site.com/page --fresh   # 先清掉存量 Cookie 再重抓
+  python tests/cookie_test.py https://your-site.com/page --show-cookie   # 打印 Cookie 完整值
+  python tests/cookie_test.py https://your-site.com/page --timeout 10
 
   # 外部 Cookie（JSON）→ 导入 → 试能不能进入：
-  python test/cookie_test.py https://site.com/page --cookie-json '{"sid":"abc","token":"xyz"}'
-  python test/cookie_test.py https://site.com/page --cookie-json cookies.json   # 从文件读
+  python tests/cookie_test.py https://site.com/page --cookie-json '{"sid":"abc","token":"xyz"}'
+  python tests/cookie_test.py https://site.com/page --cookie-json cookies.json   # 从文件读
 
 --cookie-json 接受的 JSON 格式（二选一）：
   1. 扁平对象   {"sid": "abc", "token": "xyz"}
@@ -32,7 +32,7 @@
 说明：
 - Cookie 存在存储目录的 cache/fetch_hints.json（按根域名），脚本会打印文件位置。
 - 页面不通过 Set-Cookie 下发 Cookie（只在 JS 里写）时 ① 会失败——那种 Cookie 请用
-  `test/scrapling_test.py <url> --cookie "a=1; b=2"` 从浏览器原样粘贴（分号串人工通道），
+  `tests/scrapling_test.py <url> --cookie "a=1; b=2"` 从浏览器原样粘贴（分号串人工通道），
   或者用本脚本的 --cookie-json 传 JSON。
 - 本脚本只认**恰好一个 URL**（单独的测试、单独的功能）；Cookie 的 7 天失效防抖、
   策略/经验等其余逻辑不在本脚本职责内。
@@ -52,7 +52,7 @@ import sys
 import time
 from pathlib import Path
 
-# 脚本住在 test/ 下：把仓库根加进 sys.path，保证能 import almond.*
+# 脚本住在 tests/ 下：把仓库根加进 sys.path，保证能 import almond.*
 _REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)

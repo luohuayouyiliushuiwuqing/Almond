@@ -14,8 +14,8 @@ from almond.core.log import logger
 from almond.core.proxy import ensure_working_proxy, forced_route, resolve_proxy
 from almond.core.records import upsert_record_if_epoch
 from almond.core.storage import storage_epoch
-from almond.web.webui import imgproxy
-from almond.web.webui.api_util import require_http_url, send_json
+from almond.webui import imgproxy
+from almond.webui.api_util import require_http_url, send_json
 
 
 def fetch_one(h, qs: dict, body: dict) -> None:

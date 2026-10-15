@@ -6,7 +6,7 @@ from almond.core.records import (
     remove_tag_from_record, set_title,
 )
 from almond.core.storage import storage_epoch
-from almond.web.webui.api_util import require_fields, send_json
+from almond.webui.api_util import require_fields, send_json
 
 
 def _int(v) -> int:

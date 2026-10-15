@@ -2,7 +2,7 @@
 set -u
 IFS=$'\n\t'
 
-PORTS=(4000 8765)
+PORTS=(4000)
 PATTERNS=("almond")          # cmdline 关键字，可多个
 GRACE=3                      # SIGTERM 后等待秒数
 SUDO=""

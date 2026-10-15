@@ -18,34 +18,38 @@
 
 ```
 Almond/
-├── pyproject.toml         # 打包配置：依赖来源、控制台入口
-├── frontend/              # 前端（React 18 + Vite，需构建）
+├── pyproject.toml         # 打包配置：依赖来源、控制台入口（只剩 almond-webui）
+├── requirements.txt       # 全量 pinned 依赖（同时是 pyproject 的依赖来源）
+├── frontend/              # 前端源码（React 18 + Vite，需构建）
 │   ├── index.html         # SPA 入口 HTML（标题等）
-│   ├── vite.config.js     # Vite 配置：base '/app/'
+│   ├── vite.config.js     # Vite 配置：base '/app/'，产物直出 almond/webui/dist/
 │   ├── package.json       # 前端依赖与脚本（dev / build / preview）
 │   └── src/               # 源码：App.jsx + 组件 + store.js + 样式
-├── almond/               # Python 包（绝对 import，无 sys.path hack）
+├── almond/                # Python 包（绝对 import，无 sys.path hack）
 │   ├── core/              # 与界面无关的核心逻辑
 │   │   ├── fetcher.py     # 核心：三级降级抓取 + 元数据/详情提取
 │   │   ├── fetchpool.py   # 抓取子进程池：抓取不占 Web 进程，切库即硬杀（含浏览器进程树）
 │   │   ├── confirm.py     # 方案确认：自动抓取前先试出每个域名的最优抓取方案，没方案整组跳过
-│   │   ├── fields.py      # 「标签: 值」字段解析（看板与试验台共用）
-│   │   └── records.py     # SQLite 存储层
-│   └── web/
-│       ├── webui/         # 主界面：Raindrop 看板（默认 0.0.0.0:4000）
-│       │   ├── server.py  # 路由分发 + REST API
-│       │   ├── staticfiles.py / imgproxy.py / fsbrowse.py
-│       │   │              # 静态文件解析 / 图片代抓 / 目录浏览（都不碰 socket）、
-│       │   │              # 并直接 serve 前端构建产物 dist/（`/` 为 SPA 入口，`/app` 挂资源）
-│       │   └── dist/      # Vite 构建产物（前端 build 后生成，被后端直接 serve，已纳入版本控制）
-│       └── demo/          # 独立演示：CSS 选择器试验台（端口 8765）
-│           ├── server.py  # 静态托管 + /api/fetch（输入网址按选择器提取）
-│           └── index.html / style.css / app.js / fixture.html
-├── metadata.db            # SQLite 数据库（运行时生成，已 gitignore，位置可在界面迁移）
-├── config.json            # 记录当前存储目录（运行时生成，已 gitignore）
-├── docs/                  # git 子模块（→ AlmondMD）：CHANGE.md 变更记录 · TODO.md 待办 · ROADMAP.md 功能方向 · CLAUDE.md 使用指引
+│   │   ├── fetch_hints.py · hints_strategy.py · hints_cookie.py
+│   │   │                  # 经验缓存本体 / 策略成绩册 / Cookie 层
+│   │   ├── proxy.py       # 代理唯一入口：规则匹配 + 端口探测顶替 + 定时刷新
+│   │   ├── storage.py · db.py         # 存储目录与纪元 / SQLite 连接与迁移
+│   │   ├── records.py · domains.py    # 记录标签规则 CRUD / 域名配置与重置
+│   │   └── fields.py · hostutil.py · log.py
+│   │                      # 「标签: 值」解析 / 根域名与国内判定 / 日志
+│   └── webui/             # 唯一界面后端：Raindrop 看板（默认 0.0.0.0:4000）
+│       ├── server.py      # 路由表合并 + 薄 Handler + 启动入口
+│       ├── api_{fetch,records,domains,proxy,storage}.py   # 按资源的 REST 处理器
+│       ├── api_util.py    # 参数校验与 JSON 响应助手
+│       ├── staticfiles.py · imgproxy.py · fsbrowse.py
+│       │                  # 静态解析 / 图片代抓 / 目录浏览（都不碰 socket）
+│       └── dist/          # Vite 构建产物（被后端直接 serve，已纳入版本控制）
+├── tests/                 # 独立测试脚本（无 pytest：unittest 用例 + 抓取演练脚本）
+├── scripts/               # stop_service.{sh,ps1,bat}：停服务进程并释放端口
 ├── extension/             # 浏览器插件（Chrome/Edge MV3）：当前页 / 标签页一键收藏进看板，加载即用
-└── requirements.txt       # 全量 pinned 依赖（同时是 pyproject 的依赖来源）
+├── docs/                  # git 子模块（→ AlmondMD）：CHANGE.md 变更记录 · TODO.md 待办 · ROADMAP.md 功能方向 · CLAUDE.md 使用指引 · ARCHITECTURE.md 架构
+├── metadata.db            # SQLite 数据库（运行时生成，已 gitignore，位置可在界面迁移）
+└── config.json            # 记录当前存储目录（运行时生成，已 gitignore）
 ```
 
 ## 环境准备
@@ -68,7 +72,7 @@ pip install -e . --no-deps --no-build-isolation --no-index
 ## 前端构建（React + Vite）
 
 前端已从原生 ES 模块（无构建步骤）迁移到 **React 18 + Vite**，源码在 `frontend/`，
-构建后由后端 `almond-webui` / `python -m almond.web.webui.server` 直接托管，改完前端必须重新构建。
+构建后由后端 `almond-webui` / `python -m almond.webui.server` 直接托管，改完前端必须重新构建。
 
 ```bash
 cd frontend
@@ -80,13 +84,13 @@ npm install
 #    dev 阶段用 Vite 反代 /api 免 CORS；后端跑在别的端口时用环境变量指定：
 VITE_API_TARGET=http://127.0.0.1:8888 npm run dev
 
-# 3. 构建生产包（输出到 almond/web/webui/dist/，后端直接 serve）
+# 3. 构建生产包（输出到 almond/webui/dist/，后端直接 serve）
 npm run build
 ```
 
 - 构建出的 SPA 由后端托管：`/` 返回 `dist/index.html`，静态资源挂在 `/app/*`（见 `vite.config.js` 的 `base: '/app/'`）；未知且非 `/api/*` 的路径回落到 SPA 入口，支持 `#/domain/xxx` 刷新 / 分享链接直达。
 - 改完 `frontend/src/` 后需 `npm run build` 才能看到效果；后端每次请求从磁盘读 `dist/`，**无需重启后端**。
-- 前端运行时不依赖任何 npm 全局包；构建产物已纳入版本控制（`.gitignore` 放行 `almond/web/webui/dist/`）。
+- 前端运行时不依赖任何 npm 全局包；构建产物已纳入版本控制（`.gitignore` 放行 `almond/webui/dist/`）。
 
 ## 使用
 
@@ -99,7 +103,7 @@ almond-webui --host 127.0.0.1             # 只监听本机（不对外暴露）
 almond-webui --host 0.0.0.0 --port 4000   # 显式指定
 
 # 免安装方式（必须在仓库根目录执行）
-python -m almond.web.webui.server [--host 0.0.0.0] [--port 4000]
+python -m almond.webui.server [--host 0.0.0.0] [--port 4000]
 ```
 
 - 顶部粘贴 URL 回车「添加」；右侧搜索框过滤；`☰` 收起 / 展开左侧栏
@@ -117,18 +121,6 @@ python -m almond.web.webui.server [--host 0.0.0.0] [--port 4000]
 - **域名子页面**：侧栏域名行**点名字仍是筛选**，行**左「编辑」**开弹窗、行**右「详情」**进该域名的子页（地址栏变 `#/domain/xxx`，刷新、浏览器后退、直接分享链接都能用）；零散域名（侧栏不显示的）从「代理」面板的域名列表进入。子页里是**该域名专属的列表清单**——域头给统计与设置（别名 / 代理 / 自动补抓开关 / 封面来源 / 按站点详情选择器 / 域名重置），工具栏的**排序、展示字段、标签筛选按域名记住**，下次进这个域名自动套用；列表行可勾选，直接复用看板的全选 / 反选 / 标签 / 重新抓取 / 删除 / 导出
 - 点缩略图或标题在新标签打开链接
 
-### 选择器试验台（演示）
-
-```bash
-almond-demo                        # http://127.0.0.1:8765/
-
-# 免安装方式（必须在仓库根目录执行）
-python -m almond.web.demo.server
-```
-
-输入网址 + CSS 选择器（如 `.space-y-2 > *`），服务端抓取并展示匹配元素与字段卡片；
-也可用 `http://127.0.0.1:8765/fixture.html` 快速体验「标签: 值」解析。
-
 ## API（webui）
 
 全部接口**无鉴权**，风险见下方「⚠ 无鉴权」。
@@ -136,15 +128,16 @@ python -m almond.web.demo.server
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/records` | 全部记录（含标签与 `fetched` 快照标记）+ `epoch`（当前存储纪元，抓取请求要带上） |
-| POST | `/api/fetch` | `{url, proxy, epoch}` 抓取并合并入库（按域名配置应用详情选择器与封面规则），返回合并后的记录与 `success`（**本次**抓取是否成功——失败按合并规则不覆盖已有内容，`record.success` 可能仍是旧值）；抓取跑在**子进程**（切库即硬杀，不占 Web 进程）；`epoch` 与当前纪元不符（切库后才到达的旧请求）直接作废回 `stale`，一个包都不发；本机代理端口转发不通时自动顶替为可用端口，顶替结果经 `proxy_swapped` 回传 |
+| POST | `/api/fetch` | `{url, proxy, epoch}` **异步提交**，立即回 `{ok: true, job_id}`；结果由 `GET /api/fetch/status?job_id=…` 收（前端延后 1s 开轮询、每 500ms 一次、5 分钟封顶）。抓取跑在**子进程**（切库即硬杀，不占 Web 进程），按域名配置应用 `detail_selector` / `detail_mode` / `cover`；**完成后的那份响应**才带合并入库的记录与 `success`（**本次**抓取是否成功——失败按合并规则不覆盖已有内容，`record.success` 可能仍是旧值）；`epoch` 与当前纪元不符（切库后才到达的旧请求）直接作废回 `stale`，一个包都不发；本机代理端口转发不通时自动顶替为可用端口，顶替结果在**提交响应**里就经 `proxy_swapped` 回传，不必等轮询 |
+| GET | `/api/fetch/status?job_id=…` | 异步抓取结果查询（供前端轮询）：**200** 任务完成、返回与 `/api/fetch` 同格式的完整结果；**204** 仍在跑、无 body；**404** `job_id` 无效或已被切库清掉；结果属于旧纪元的回 `stale: true` 并作废 |
 | POST | `/api/records/quick` | `{items:[{url,title,thumbnail,favicon,tags}]}` 快照批量入库，不联网 |
 | GET | `/api/records/pending` | 未抓取记录（`fetched=0`）的 URL 列表——补抓队列的轮询源，页面开着时发现别处新进库的链接 |
 | PATCH | `/api/record` | `{url, title}` 重命名 |
 | DELETE | `/api/record?url=…` | 删除记录 |
 | GET | `/api/img?src=…&proxy=…` | 服务端代抓图片（缩略图/favicon 用，命中本地缓存不走网络） |
-| GET | `/api/domains` | 域名列表：`display_name`、`need_proxy` 三态（null 跟随全局 / 1 用代理 / 0 直连），以及每域名配置 `prefs`（显示偏好 JSON）、`auto_fetch`（自动补抓开关，null 跟随）、`detail_selector`（按站点详情选择器）、`cover`（封面开关）、**`tested`（系统实测：可达性结论 + `strategy` 方案 id + `plan` 是否有可用方案 + `confirm` 确认结论，只读）** |
+| GET | `/api/domains` | 域名列表：`display_name`、`need_proxy` 三态（null 跟随全局 / 1 用代理 / 0 直连），以及每域名配置 `prefs`（显示偏好 JSON）、`auto_fetch`（自动补抓开关，null 跟随）、`detail_selector`（按站点详情选择器）、`detail_mode`（详情提取形态：`''` 「标签: 值」行 / `'tags'` 扁平标签链 / `'og'` OG 快速模式）、`cover`（封面开关）、**`tested`（系统实测：可达性结论 + `strategy` 方案 id + `plan` 是否有可用方案 + `confirm` 确认结论，只读）** |
 | POST | `/api/confirm` | `{domains?, proxy, epoch}` **方案确认阶段**：给没有方案的域名各挑一条真实网址试抓一次，成功学出方案并入库、失败写持久结论；返回 `{ready, confirmed, failed, skipped, transient, aborted}`（无方案的域名由前端整组跳过）；`auto_fetch=0` 的域名不参与 |
-| PATCH | `/api/domain` | `{name, display_name?, need_proxy?, prefs?, auto_fetch?, detail_selector?, cover?}` 更新域名设置（只改给到的字段） |
+| PATCH | `/api/domain` | `{name, display_name?, need_proxy?, prefs?, auto_fetch?, detail_selector?, detail_mode?, cover?}` 更新域名设置（只改给到的字段） |
 | POST | `/api/domain/replace` | `{old, new}` 域名重置：原域名（含子域名）在库里的全部引用整体换成新域名；返回 `total/records/merged/failed/rules`（命中 / 成功 / 重复 / 失败 / 改写规则） |
 | GET | `/api/tags` | 标签列表 |
 | POST | `/api/tag` | `{name}` 新建标签 |
@@ -156,6 +149,7 @@ python -m almond.web.demo.server
 | DELETE | `/api/proxy-rule?id=…` | 删除规则 |
 | GET | `/api/proxy-domains` | 最终会走代理的根域名（侧栏徽标数据源） |
 | POST | `/api/proxy-detect` | 探测本机 7889-7899 代理端口并**验证转发可用**，返回可用地址或 `null`（只开着不转发的坏端口不算） |
+| GET | `/api/proxy-current` | 后台定时线程最近一次探测的结论 `{proxy}`；**只读内存缓存、不发起探测**，供前端被动跟随（主动检测走上面的 `/api/proxy-detect`） |
 | GET | `/api/storage-dir` | 当前存储目录 / 数据库 / 缓存路径 |
 | POST | `/api/storage-dir` | `{path}` 切换存储目录（**不迁移**：旧数据留在原地、新目录从零开始；响应 `records` = 新目录记录数，`epoch` +1 作废在途抓取） |
 | DELETE | `/api/storage-history?path=…` | 从存储目录的历史位置里移除一条（当前目录不可移除） |
@@ -166,7 +160,7 @@ python -m almond.web.demo.server
 - **代理**：映射只表达「要不要走代理」，地址统一填在「代理」面板的全局代理里（Clash 等，默认 `http://127.0.0.1:7897`，打开页面自动探测本机 7889-7899 并验证转发）。优先级 **URL 模式规则 > 域名规则 > 全局默认**，命中即为强制值（含「强制直连」）；国内域名自动跳过代理；当前端口转发不通时先自动顶替成本机可用端口，找不到才回退直连再试整条降级链
 - **合并规则**：按 URL 去重；抓取失败保留原记录；页面无标题时不覆盖手动补充的标题
 - **数据文件**：本地私有数据（`metadata.db`、图片缓存 `cache/img/` 等）统一放在**存储目录**——默认仓库根（已 gitignore），可在界面「存储」面板点选目录切换（不迁移，立即生效）；位置记录在仓库根 `config.json`（已 gitignore）。非 editable 安装可用环境变量 `ALMOND_DATA_DIR` 指定基础目录
-- **入口约定**：只支持 `almond-webui` / `almond-demo` 或 `python -m …`（后者需在仓库根目录执行）；不要直接 `python almond/web/webui/server.py`，它依赖 `sys.path`，行为随安装状态变化
-- **监听地址**：看板默认 `0.0.0.0:4000`（所有网卡，便于远程访问），可用 `--host` / `--port` 覆盖；选择器试验台仍固定 `127.0.0.1:8765`
+- **入口约定**：只支持 `almond-webui` 或 `python -m almond.webui.server`（后者需在仓库根目录执行）；不要直接 `python almond/webui/server.py`，它依赖 `sys.path`，行为随安装状态变化
+- **监听地址**：看板默认 `0.0.0.0:4000`（所有网卡，便于远程访问），可用 `--host` / `--port` 覆盖
 - **⚠ 无鉴权**：上表全部接口都对外可达。`POST /api/fetch`、`POST /api/confirm` 与 `GET /api/img` 会让**服务器**去抓取任意 URL（SSRF），`DELETE /api/record` 可直接删库，`GET /api/fs/list` 可列出服务器任意目录、`POST /api/storage-dir` 可把数据库搬走或重建。绑到 `0.0.0.0` 意味着任何能连上该端口的人都能调用这些接口。仅本机使用请加 `--host 127.0.0.1`；确需对外暴露时，在云安全组 / 防火墙上只放行可信 IP（云主机上还需放行安全组与 `firewalld`/`ufw` 的 4000 端口，否则外部访问会超时）；token 鉴权见 [docs/TODO.md](docs/TODO.md) 第 2 项
 - **调试抓取链**：抓取日志会打印到启动命令所在的终端

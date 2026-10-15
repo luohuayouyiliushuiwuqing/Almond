@@ -11,9 +11,10 @@ session needs up front: conventions, commands, and the architecture map.
 ## Project
 
 Almond — a local web bookmark board: scrapes page metadata (title / thumbnail / favicon / "label: value"
-detail fields) and shows it as a Raindrop-style card grid. Python stdlib HTTP servers (no web framework),
-SQLite storage, a vanilla ES-module frontend (no build step), and a Chrome MV3 extension (`extension/`)
-that posts to the snapshot-import API. UI strings, code comments and commit messages are written in
+detail fields) and shows it as a Raindrop-style card grid. A Python stdlib HTTP server (no web framework)
+exposes SQLite-backed REST APIs; the frontend is **React 18 + Vite** (`frontend/`, built into
+`almond/webui/dist/` and served by that same backend), plus a Chrome MV3 extension (`extension/`) that
+posts to the snapshot-import API. UI strings, code comments and commit messages are written in
 **Chinese** — match that convention.
 
 ## Non-negotiable conventions
@@ -37,8 +38,8 @@ that posts to the snapshot-import API. UI strings, code comments and commit mess
 3. **Docs are a two-repo commit.** `docs/` is a git submodule (→ AlmondMD): commit *inside* `docs/`
    first, then commit the bumped pointer in the parent (`git add docs && git commit`). `README.md`
    and this file are the only files that stay in the parent repo.
-4. **Entry points.** Only `almond-webui` / `almond-demo` / `python -m …` (the latter run from the
-   repo root). Never document or recommend `python almond/web/webui/server.py` — absolute imports
+4. **Entry points.** Only `almond-webui` / `python -m almond.webui.server` (the latter runs from the
+   repo root). Never document or recommend `python almond/webui/server.py` — absolute imports
    need `almond` on `sys.path`, which a direct script run does not provide.
 
 ## Commands
@@ -50,19 +51,24 @@ conda activate almond
 pip install -r requirements.txt -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
 patchright install chromium            # DynamicFetcher / StealthyFetcher need the browser kernel
 pip install -e . --no-deps --no-build-isolation --no-index   # console entry points, offline
+npm --prefix frontend install          # React + Vite toolchain
+
+# frontend — the backend serves almond/webui/dist/, so any frontend change must be rebuilt
+npm --prefix frontend run dev               # :5173, /api proxied to the Python backend
+npm --prefix frontend run build             # → almond/webui/dist/
 
 # run
 almond-webui [--host 0.0.0.0] [--port 4000]   # board → http://0.0.0.0:4000/
-almond-demo                                    # selector playground → http://127.0.0.1:8765/
-python -m almond.web.webui.server [...]        # same, without installing (from repo root)
+python -m almond.webui.server [...]           # same, without installing (from repo root)
 
-# stop board + demo, including fetched browser process trees (ports 4000, 8765)
-./stop_service.sh                              # Windows twins: stop_service.ps1 / stop_service.bat
+# stop the board, including fetched browser process trees (port 4000)
+./scripts/stop_service.sh                     # Windows twins: stop_service.ps1 / stop_service.bat
 
 # the project's only test harnesses (there is no pytest suite) — one script per feature
-python test/scrapling_test.py [urls…] [--proxy … | --no-proxy] [--timeout 15] \
+python -m unittest discover -s tests          # pure-logic cases, no network
+python tests/scrapling_test.py [urls…] [--proxy … | --no-proxy] [--timeout 15] \
         [--no-browser] [--full] [-v] [--cookie STR]     # fetch stack + hints cache drill
-python test/cookie_test.py <url> [--fresh | --cookie-json JSON|FILE] \
+python tests/cookie_test.py <url> [--fresh | --cookie-json JSON|FILE] \
         [--show-cookie] [--proxy …] [--timeout 20]      # cookie harvest → cookie-direct check
 ```
 
@@ -74,13 +80,9 @@ Ubuntu 20.04 at all, so check the playwright pin before any version bump.
 No linter or formatter is configured. Offline checks before opening a browser:
 
 ```bash
-for f in almond/web/webui/js/*.js; do
-  [ "$(basename "$f")" = main.js ] && continue   # main.js top level touches document
-  node --check --input-type=module < "$f"        # syntax (bare --check parses as CommonJS)
-  node --input-type=module -e "await import('file://$PWD/$f')"   # resolves specifiers + exports
-done
-grep -nE '^[A-Za-z_$]' almond/web/webui/js/*.js  # top level must be import/export/function/const/let
-python -m py_compile almond/core/*.py almond/web/webui/*.py
+python -m py_compile almond/core/*.py almond/webui/*.py
+python -m unittest discover -s tests                 # logic-level regressions, no network
+npm --prefix frontend run build                      # JSX + whole import graph must resolve
 ```
 
 End-to-end behaviour (sidebar overflow, two-phase import, in-place card patching, …) is browser-only:
@@ -93,13 +95,14 @@ Each layer talks only to the one directly below it (full detail in `docs/CLAUDE.
 its「分层规范」section is binding):
 
 ```
-almond/web/webui/js/*.js    17 vanilla ES modules, entry js/main.js (no build step)
-  api.js  统一请求层（唯一 fetch() 出口：epoch 注入/中止登记/proxy_swapped/fetchJob 轮询）
-  bus.js  极简总线（render / updateCard 两条回调边，订阅只在 main.js init()）
-    ↓
-almond/web/webui/server.py  薄 Handler：路由表合并 + dispatch + 兜底
-almond/web/webui/api_*.py   按资源 REST 处理器（fetch/records/domains/proxy/storage）
-almond/web/webui/{api_util,staticfiles,imgproxy,fsbrowse}.py  校验助手 / 静态 / 图片 / 目录
+frontend/src/               React 18 SPA，Vite 构建 → almond/webui/dist/，后端挂在 /app
+  store.js  唯一可变状态 + 全部业务动作（useSyncExternalStore + version 计数驱动重渲）
+  api.js    统一请求层（fetch() 应只出现在这里：epoch 注入 / 中止登记 / proxy_swapped / fetchJob 轮询）
+  ui.js     模态总线（openModal(type, payload)，App 统一渲染弹层）
+    ↓ HTTP / REST
+almond/webui/server.py      薄 Handler：路由表合并 + dispatch + 兜底
+almond/webui/api_*.py       按资源 REST 处理器（fetch/records/domains/proxy/storage）
+almond/webui/{api_util,staticfiles,imgproxy,fsbrowse}.py  校验助手 / 静态 / 图片 / 目录
     ↓
 almond/core/fetcher.py      三级降级抓取 + 元数据/详情提取（force_route：显式路由约束策略层）
 almond/core/fetchpool.py    抓取子进程池：/api/fetch 的执行器，切库即硬杀进程树
@@ -112,10 +115,9 @@ almond/core/records.py      记录/标签/规则 CRUD · domains.py 域名配置
 almond/core/hostutil.py     根域名 + 国内判定 · fields.py「标签: 值」· log.py 日志
 ```
 
-`almond/web/demo/` is a second, independent server (port 8765) for CSS-selector experiments; it
-shares `fetcher`/`fields` with the board and no state. `extension/` is a standalone MV3 extension —
-zero server changes, it posts to `POST /api/records/quick`; see `extension/README.md` before touching
-it (CORS/absolute-URL pitfalls are listed there).
+`almond/webui/` is the only server in the tree. `extension/` is a standalone MV3 extension — zero
+server changes, it posts to `POST /api/records/quick`; see `extension/README.md` before touching it
+(CORS/absolute-URL pitfalls are listed there).
 
 Invariants that must survive any edit:
 
@@ -125,10 +127,11 @@ Invariants that must survive any edit:
 - **Storage epoch**: `/api/fetch` carries `state.storageEpoch`; a storage-dir switch bumps
   `_STORAGE_EPOCH`, hard-kills the fetchpool children (whole browser tree), and writes go through
   `upsert_record_if_epoch()` so late results never land in the new db.
-- **Frontend seams**: `fetch()` 只出现在 `js/api.js`；跨模块 `render`/`updateCard` 只走 `bus`
-  （订阅只在 `main.js init()`）。其余跨模块边保持 hoisted `function` + 运行时调用
-  （剩余环：`board⇄domain-page`、`cards⇄domain-page`、`fetch⇄detail`、`backfill⇄proxy-panel`）；
-  违反会在模块求值期 TDZ 报错，用 Commands 里的 `grep` 复查。
+- **Frontend seams**: 可变状态只有 `store.js` 一处，组件经 `useStore()` 读、调 `store.js` 导出的动作写，
+  不在组件里另存看板数据。`api.js ⇄ store.js` 是有意相互 import——双方都只在函数调用期取对方导出，
+  改成模块求值期解引用会拿到 undefined。⚠ 有一处**尚未收敛**的例外：`SelectBar.jsx` 的批量删除自己
+  循环 `fetch('DELETE /api/record')` 并直接改 `s.records` / `s.selectedUrls`，绕开了 `api.js` 与 store
+  动作（因此拿不到 epoch 注入与请求中止）。新增请求走 `api.js`，不要照抄这里。
 - **`requirements.txt` is a build input** (pyproject dynamic deps): only full-line `#` comments and
   `name==ver` lines — no inline comments, no `-i`/`-r` option lines, or the build breaks.
 - **No auth**: every `/api/*` is open (SSRF via `/api/fetch` + `/api/img`, db deletable). Use

@@ -2,7 +2,7 @@
 
 from almond.core.proxy import current_proxy, detect_working_proxy, list_proxy_domains
 from almond.core.records import delete_proxy_rule, list_proxy_rules, upsert_proxy_rule
-from almond.web.webui.api_util import send_json
+from almond.webui.api_util import send_json
 
 
 def rules(h, qs: dict, body: dict) -> None:

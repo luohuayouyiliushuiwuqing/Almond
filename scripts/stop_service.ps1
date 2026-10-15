@@ -8,13 +8,13 @@
 #   - 失败时打印 PID 详情 + systemd / docker 提示
 #
 # 用法（建议以管理员身份运行）：
-#   powershell -ExecutionPolicy Bypass -File .\stop_service.ps1
-#   powershell -ExecutionPolicy Bypass -File .\stop_service.ps1 -Ports 4000
-#   powershell -ExecutionPolicy Bypass -File .\stop_service.ps1 -Patterns "almond","almond-webui"
+#   powershell -ExecutionPolicy Bypass -File .\scripts\stop_service.ps1
+#   powershell -ExecutionPolicy Bypass -File .\scripts\stop_service.ps1 -Ports 4000
+#   powershell -ExecutionPolicy Bypass -File .\scripts\stop_service.ps1 -Patterns "almond","almond-webui"
 
 [CmdletBinding()]
 param(
-    [int[]]$Ports          = @(4000, 8765),
+    [int[]]$Ports          = @(4000),
     [string[]]$Patterns    = @("almond"),
     [int]$GraceSeconds     = 3,
     [int]$PortWaitSeconds  = 5

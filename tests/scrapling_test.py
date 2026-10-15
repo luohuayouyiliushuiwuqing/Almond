@@ -10,17 +10,17 @@
   4. almond.core.fetcher.get_metadata  —— Almond 生产链路（三级降级 + 元数据提取）端到端
 
 用法：
-  python test/scrapling_test.py https://example.com https://your-site.com/page
-  python test/scrapling_test.py                  # 不带参数用默认示例站
-  python test/scrapling_test.py --proxy http://127.0.0.1:7897   # 指定代理（默认自动探测端口）
-  python test/scrapling_test.py --no-proxy       # 强制不探测代理（测纯直连）
-  python test/scrapling_test.py --no-browser     # 跳过浏览器引擎（更快）
-  python test/scrapling_test.py --full           # 忽略经验/策略，强制跑全部分层
-  python test/scrapling_test.py -v               # 输出 DEBUG 级日志（逐级抓取明细）
-  python test/scrapling_test.py https://a.com --cookie "sid=1; token=2"
+  python tests/scrapling_test.py https://example.com https://your-site.com/page
+  python tests/scrapling_test.py                  # 不带参数用默认示例站
+  python tests/scrapling_test.py --proxy http://127.0.0.1:7897   # 指定代理（默认自动探测端口）
+  python tests/scrapling_test.py --no-proxy       # 强制不探测代理（测纯直连）
+  python tests/scrapling_test.py --no-browser     # 跳过浏览器引擎（更快）
+  python tests/scrapling_test.py --full           # 忽略经验/策略，强制跑全部分层
+  python tests/scrapling_test.py -v               # 输出 DEBUG 级日志（逐级抓取明细）
+  python tests/scrapling_test.py https://a.com --cookie "sid=1; token=2"
                                                  # 为该域名存入 Cookie（浏览器里原样复制），
                                                  # 之后 fetch_page 每次都 Cookie 优先直取
-  python test/scrapling_test.py --timeout 10     # 单次抓取超时秒数
+  python tests/scrapling_test.py --timeout 10     # 单次抓取超时秒数
 
 日志：统一走 almond.core.log（loguru），格式「时间 | 级别 | 文件:行号 | 消息」，
   终端按级别着色；测试报告的 PASS/FAIL/SKIP 也走同一出口（SUCCESS/INFO/ERROR 级）。
@@ -43,7 +43,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-# 脚本住在 test/ 下：把仓库根加进 sys.path，保证能 import almond.*
+# 脚本住在 tests/ 下：把仓库根加进 sys.path，保证能 import almond.*
 _REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
@@ -134,7 +134,7 @@ def _chromium_path() -> str | None:
 
 
 def _has_almond() -> bool:
-    # 脚本在 test/ 下，仓库根是上一级
+    # 脚本在 tests/ 下，仓库根是上一级
     return (Path(__file__).resolve().parent.parent / "almond").exists()
 
 

@@ -5,8 +5,8 @@ import time
 from almond.core.log import logger
 from almond.core.records import count_records
 from almond.core.storage import get_storage_paths, remove_storage_history, set_storage_dir
-from almond.web.webui import fsbrowse
-from almond.web.webui.api_util import send_json
+from almond.webui import fsbrowse
+from almond.webui.api_util import send_json
 
 
 def paths(h, qs: dict, body: dict) -> None:
