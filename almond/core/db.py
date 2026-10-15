@@ -71,6 +71,17 @@ CREATE TABLE IF NOT EXISTS proxy_rules (
 )
 """
 
+# 抓取经验缓存（原 cache/fetch_hints.json）：按根域名一行，data 列存该域名的经验行 JSON。
+# 改存 DB 是为解决「单 JSON 文件整文件读写」在经验量很大时的性能瓶颈——DB 按主键
+# 定位单行做增量 upsert 更稳，且经验随存储目录（库）走，与 records 一致。
+_SCHEMA_FETCH_HINTS = """
+CREATE TABLE IF NOT EXISTS fetch_hints (
+    host    TEXT PRIMARY KEY,               -- 根域名
+    data    TEXT NOT NULL,                  -- 经验行 JSON（direct/proxy/strategy/strategies/cookie/confirm）
+    updated TEXT NOT NULL DEFAULT ''
+)
+"""
+
 # 代理只表达「要不要走」，具体地址仅存于全局配置一处。
 # 旧表存的是代理地址（proxy TEXT）：
 #   proxy_rules 旧语义 proxy='' = 强制直连 → need_proxy=0
@@ -99,6 +110,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.execute(_SCHEMA_TAGS)
     conn.execute(_SCHEMA_RECORD_TAGS)
     conn.execute(_SCHEMA_PROXY_RULES)
+    conn.execute(_SCHEMA_FETCH_HINTS)
     conn.execute("PRAGMA journal_mode=WAL")
     _migrate_to_bool_proxy(conn)
 
@@ -108,6 +120,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("SELECT fetched FROM records LIMIT 1")
     except sqlite3.OperationalError:
         conn.execute("ALTER TABLE records ADD COLUMN fetched INTEGER NOT NULL DEFAULT 1")
+
+    # 迁移：created_at 列（数据创建时间戳，用于看板按时间从近到远排序）。
+    # 不设默认值、允许 NULL：老库（本特性上线前的历史记录）留 NULL，排序时沉到最底，
+    # 显示端用「—」表示未知；本特性之后的新数据与导入数据才带真实时间戳，且任何更新路径
+    # 都不改写它（不可变）。
+    try:
+        conn.execute("SELECT created_at FROM records LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE records ADD COLUMN created_at TEXT")
 
     # 迁移：group_name 列 → tags 表（一次性）
     try:

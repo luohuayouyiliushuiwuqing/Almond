@@ -12,20 +12,21 @@ JSON 缓存存取（`load`/`save`）、跨进程效应通道（子进程收集�
 2. 代理端口在、但转发不通——健康判定见 `proxy.proxy_reachable`（不在本模块）。
 3. 常规打法拿到了数据 → 学成策略（hints_strategy）；任何成功顺手收 Cookie（hints_cookie）。
 
-数据放**存储目录的 cache/ 下**（`cache/fetch_hints.json`，JSON 缓存而非关键数据）：
-**切换存储目录不迁移本文件**——新目录从零开始，旧经验留在旧目录；删掉文件即重置全部学习。
+数据放**存储目录的 metadata.db**（`fetch_hints` 表，按根域名一行，data 列存经验行 JSON；
+原为 cache/fetch_hints.json，已迁移进库）：切换存储目录即跟随新库（旧库经验留在旧库），
+落库改为按 host 增量 upsert，数据量大时不再整体重写单文件。
 按**根域名**记录：`direct`/`proxy`（三态可达性）+ `strategy` + `cookie` + `confirm`。
 
 线程安全：模块级 RLock，读写文件原子替换（ThreadingHTTPServer + 补抓 5 并发）。
 """
 
 import json
-import os
+import sqlite3
 import threading
 from datetime import datetime
 from pathlib import Path
 
-from almond.core import hostutil, storage
+from almond.core import db, hostutil, storage
 from almond.core.log import logger
 from almond.core.proxy import proxy_reachable
 
@@ -46,6 +47,7 @@ _NETWORK_MARKERS = (
 
 LOCK = threading.RLock()                                        # 护 _DATA（策略/Cookie 共用）
 _DATA: dict | None = None                                       # {"hosts": {域名: 经验行}}
+_DIRTY: set = set()                                             # 本轮改动过的 host，save() 只 upsert 这些
 
 # 存储纪元写守卫：fetch_page 入口 enter_fetch() 绑定当前纪元；抓取期间切换了存储目录
 # → 后续写入（经验/策略/Cookie）全部静默作废，绝不把旧项目的学习写进新目录。
@@ -58,9 +60,10 @@ def enter_fetch() -> int:
     同时丢弃内存缓存——抓取子进程是常驻的，别的进程（主进程/兄弟子进程）
     写过的新策略/Cookie 必须在下一次抓取时读到盘上的最新版本。
     """
-    global _DATA
+    global _DATA, _DIRTY
     with LOCK:
         _DATA = None
+        _DIRTY.clear()
     epoch = storage.storage_epoch()
     _FETCH_EPOCH.epoch = epoch
     return epoch
@@ -150,39 +153,100 @@ def fetch_stale() -> bool:
     return epoch is not None and epoch != storage.storage_epoch()
 
 
-# ---------------------------------------------------------------- 缓存存取（兄弟模块的依赖面）
+# ---------------------------------------------------------------- 缓存存取（DB 后端：fetch_hints 表）
+# 每个根域名一行：data = 该域名经验行的 JSON（direct/proxy/strategy/strategies/cookie/confirm）。
+# 内存 _DATA 仍是进程内 authoritative 缓存；写盘改为按 host 增量 upsert，避免大缓存整体重写
+# （数据量大时 JSON 整文件读写会成为瓶颈，DB 按主键定位单行走 KV 更稳）。
+
+_LEGACY_FILENAME = "fetch_hints.json"   # 旧版缓存文件名（迁移后改名备份，不删）
+_MIGRATED = False                       # 进程内只尝试迁移一次
+
+_SQL_UPSERT = (
+    "INSERT INTO fetch_hints (host, data, updated) VALUES (?, ?, ?) "
+    "ON CONFLICT(host) DO UPDATE SET data=excluded.data, updated=excluded.updated"
+)
+
+
+def _legacy_path() -> Path:
+    """旧版 JSON 缓存位置（迁移源）。"""
+    return storage.data_dir() / "cache" / _LEGACY_FILENAME
+
 
 def path() -> Path:
-    """缓存文件位置（跟随存储目录，切换后自动指向新位置）。"""
-    return storage.data_dir() / "cache" / HINTS_FILENAME
+    """经验缓存现在存于 metadata.db 的 fetch_hints 表（跟随存储目录）；返回库路径供展示。"""
+    return storage.db_path()
+
+
+def _migrate_legacy() -> None:
+    """把旧版 cache/fetch_hints.json 导入 fetch_hints 表（仅库为空且旧文件存在时，进程内一次）。"""
+    global _MIGRATED
+    _MIGRATED = True
+    legacy = _legacy_path()
+    if not legacy.exists():
+        return
+    try:
+        raw = json.loads(legacy.read_text(encoding="utf-8-sig"))
+        hosts = raw.get("hosts", {}) if isinstance(raw, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        hosts = {}
+    if not hosts:
+        return
+    with db.conn() as conn:
+        conn.executemany(
+            _SQL_UPSERT,
+            [(h, json.dumps(v, ensure_ascii=False), v.get("updated", "")) for h, v in hosts.items()],
+        )
+    # 备份旧文件，避免双源（cache 非关键数据，可随时由 DB 重建）
+    try:
+        legacy.replace(legacy.with_name(_LEGACY_FILENAME + ".migrated"))
+    except OSError:
+        pass
 
 
 def load() -> dict:
-    """读缓存（内存态；进程内共享，调用方持 LOCK 修改后调 save()）。"""
+    """读缓存（进程内共享；修改后调 save(domain)）。首次从 fetch_hints 表全量载入，空库则迁移旧 JSON。"""
     global _DATA
     if _DATA is None:
-        parsed: dict = {}
+        parsed: dict = {"hosts": {}}
         try:
-            f = path()
-            if f.exists():
-                # utf-8-sig：Windows 记事本/PowerShell 写出的带 BOM 文件也能读
-                raw = json.loads(f.read_text(encoding="utf-8-sig"))
-                if isinstance(raw, dict):
-                    parsed = raw
-        except (OSError, json.JSONDecodeError):
-            parsed = {}          # 文件损坏当没有经验，下次写入会覆盖
-        parsed.setdefault("hosts", {})
+            with db.conn() as conn:
+                for r in conn.execute("SELECT host, data FROM fetch_hints"):
+                    parsed["hosts"][r["host"]] = json.loads(r["data"])
+        except sqlite3.Error:
+            parsed = {"hosts": {}}          # 库损坏当没有经验，下次写入会覆盖
+        if not parsed["hosts"] and not _MIGRATED:
+            _migrate_legacy()
+            try:
+                with db.conn() as conn:
+                    for r in conn.execute("SELECT host, data FROM fetch_hints"):
+                        parsed["hosts"][r["host"]] = json.loads(r["data"])
+            except sqlite3.Error:
+                pass
         _DATA = parsed
     return _DATA
 
 
-def save() -> None:
-    """原子落盘（写 tmp 后 replace），读方不会看到半截文件。"""
-    f = path()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    tmp = f.parent / (f.name + ".tmp")
-    tmp.write_text(json.dumps(_DATA, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, f)
+def save(domain: str | None = None) -> None:
+    """增量落库：upsert 本轮改动的 host（传 domain 即标记它；不传则清空前写入 _DIRTY）。"""
+    if domain is not None:
+        _DIRTY.add(domain)
+    if not _DIRTY:
+        return
+    rows = []
+    with LOCK:
+        hosts = _DATA.get("hosts", {}) if _DATA else {}
+        for h in list(_DIRTY):
+            row = hosts.get(h)
+            if row is None:
+                continue
+            rows.append((h, json.dumps(row, ensure_ascii=False), row.get("updated", "")))
+    if rows:
+        try:
+            with db.conn() as conn:
+                conn.executemany(_SQL_UPSERT, rows)
+        except sqlite3.Error:
+            logger.warning("fetch_hints 落库失败（本条经验未保存）", exc_info=True)
+    _DIRTY.clear()
 
 
 def host_of(url: str) -> str:
@@ -205,7 +269,7 @@ def _touch(url: str, key: str, value: bool) -> None:
             return
         row[key] = value
         row["updated"] = datetime.now().strftime(TS_FMT)
-        save()
+        save(domain)
 
 
 def hint(url: str) -> dict:
@@ -322,7 +386,7 @@ def confirm_domain(url: str, ok: bool, reason: str = "") -> None:
         row = load()["hosts"].setdefault(domain, {})
         row["confirm"] = {"ok": bool(ok), "at": now, "reason": reason or ""}
         row["updated"] = now
-        save()
+        save(domain)
 
 
 def get_confirm(url: str) -> dict | None:
@@ -334,9 +398,10 @@ def get_confirm(url: str) -> dict | None:
 
 def _on_storage_changed() -> None:
     """切库监听（由 storage.set_storage_dir 触发）：丢弃内存中的经验缓存——
-    下一次 load() 落到**新目录**（新目录没有本文件就从空开始，绝不带旧项目的学习）。"""
-    global _DATA
+    下一次 load() 落到**新库**（新库没有本表就从空开始，绝不带旧项目的学习）。"""
+    global _DATA, _DIRTY
     _DATA = None
+    _DIRTY.clear()
 
 
 storage.on_storage_changed(_on_storage_changed)

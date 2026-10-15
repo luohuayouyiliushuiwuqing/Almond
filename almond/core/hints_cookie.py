@@ -67,7 +67,7 @@ def set_cookie(url: str, value: str) -> None:
         row["cookie"] = {"value": value, "added": now}
         row.pop("cookie_failed_at", None)
         row["updated"] = now
-        save()
+        save(domain)
 
 
 def get_cookie(url: str) -> dict | None:
@@ -108,7 +108,7 @@ def touch_cookie(url: str, ms: int | None = None, response=None, *, new_cookies:
             ck["value"] = _header_of(merged)
         row = load()["hosts"][domain]
         row["updated"] = now
-        save()
+        save(domain)
 
 
 def drop_cookie(url: str) -> None:
@@ -128,7 +128,7 @@ def drop_cookie(url: str) -> None:
         if had:
             row["cookie_failed_at"] = now
         row["updated"] = now
-        save()
+        save(domain)
 
 
 def _cookie_banned(row: dict) -> bool:
@@ -181,5 +181,5 @@ def store_cookie(url: str, new: dict) -> bool:
         ck["harvested"] = now
         row["cookie"] = ck
         row["updated"] = now
-        save()
+        save(domain)
     return True

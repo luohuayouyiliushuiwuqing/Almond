@@ -88,7 +88,7 @@ def save_strategy(url: str, strategy_id: str, ms: int | None = None) -> None:
             }
         _trim_board(row)
         row["updated"] = now
-        save()
+        save(domain)
 
 
 def _trim_board(row: dict) -> None:
@@ -143,4 +143,4 @@ def drop_strategy(url: str, strategy_id: str | None = None) -> None:
             else:
                 row.pop("strategy", None)
         row["updated"] = datetime.now().strftime(TS_FMT)
-        save()
+        save(domain)
