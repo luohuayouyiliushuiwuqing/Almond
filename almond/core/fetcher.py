@@ -93,7 +93,8 @@ def _fetch_stale(host: str | None) -> bool:
 
 
 def fetch_page(url: str, timeout: int = 20, proxy: str | None = None,
-               force_route: str | None = None, static_only: bool = False):
+               force_route: str | None = None, static_only: bool = False,
+               skip_static: bool = False):
     """按 Fetcher → DynamicFetcher → StealthyFetcher 降级抓取，成功返回 Response，全部失败返回 None。
 
     国内网站自动跳过代理直连；外国站配置代理时先用代理抓取，代理不可用则回退直连重试整条降级链。
@@ -273,6 +274,10 @@ def fetch_page(url: str, timeout: int = 20, proxy: str | None = None,
         ("dynamic", lambda p: DynamicFetcher.fetch(url, timeout=timeout * 1000, proxy=p)),
         ("stealth", lambda p: StealthyFetcher.fetch(url, timeout=timeout * 1000, proxy=p)),
     )
+    # 升级路径（get_metadata 判定静态没拿到可用标题后调用）：跳过已试过的静态引擎，
+    # 直接进浏览器档（dynamic→stealth→反爬定制），避免无谓的静态重发。
+    if skip_static:
+        engines = engines[1:]
     # 「已知直连不通」与「显式规则要求走代理」都只跑代理组合，不跑直连兜底
     # （前者是经验结论，后者是用户意志——「规则命中即为强制值」）
     proxy_only = bool(proxy) and (
@@ -375,6 +380,10 @@ def get_metadata(url: str, timeout: int = 20, proxy: str | None = None,
                  static_only: bool = False) -> dict:
     """抓取一个 URL 的元数据；全部抓取失败时仅保留 URL，标题留空供手动补充。
 
+    默认「静态优先、按需升级浏览器」：先纯静态抓一发（不起浏览器），拿到标题即返回；
+    仅当静态被安全策略拦 / 直连代理都不通 / 标题为空（JS 渲染页）时才升级 DynamicFetcher/
+    StealthyFetcher。详见下方注释与 fetch_page 的 skip_static 参数。
+
     selector：按站点覆盖详情选择器（空/None 用默认 DETAIL_SELECTOR）——
       域名级配置（domains.detail_selector）由调用方传进来，选择器写错只会让详情为空。
     cover：按域名的封面开关——False=不要封面，True=只要图标（拿 favicon 当封面），
@@ -397,8 +406,36 @@ def get_metadata(url: str, timeout: int = 20, proxy: str | None = None,
     # OG 快速模式 → 强制纯静态抓取（不起浏览器、不预带/不写 Cookie）
     if detail_mode == "og":
         static_only = True
-    response = fetch_page(url, timeout=timeout, proxy=proxy,
-                          force_route=force_route, static_only=static_only)
+
+    # ── 优化 #1：默认「静态优先、按需升级浏览器」──
+    # 先纯静态抓一发（不起浏览器、不预带 Cookie，开销最低）。绝大多数站点的标题/
+    # 封面都在静态 HTML 的 <head> 里，这一发即满足，秒级→亚秒。仅当：
+    #   (a) 静态未取得数据（被安全策略拦 / 直连代理都不通 / 拿到拦截码
+    #       401/403/429/503）→ 升级；
+    #   (b) 静态拿到了，但 <title>/og:title 为空（JS 渲染页，静态壳无内容）→ 升级；
+    # 才放行 DynamicFetcher/StealthyFetcher。升级时 skip_static=True，跳过已试过的
+    # 静态重发，直接进入浏览器档。该逻辑与「策略层成绩册 / OG 模式」完全兼容：
+    # 策略层只在升级路径里生效，纯静态快路径不写策略成绩（OG 卡片也不该污染成绩册）。
+    if static_only:
+        response = fetch_page(url, timeout=timeout, proxy=proxy,
+                              force_route=force_route, static_only=True)
+    else:
+        response = fetch_page(url, timeout=timeout, proxy=proxy,
+                              force_route=force_route, static_only=True)
+        if response is None:
+            logger.debug("静态抓取未取得数据（被拦/不通），升级浏览器重试…")
+            response = fetch_page(url, timeout=timeout, proxy=proxy,
+                                  force_route=force_route, static_only=False,
+                                  skip_static=True)
+        else:
+            base_url = getattr(response, "url", None) or url
+            prelim = extract_metadata(response, base_url)
+            if not prelim.get("title"):
+                logger.debug("静态抓取标题为空（疑似 JS 渲染页），升级浏览器重试…")
+                response = fetch_page(url, timeout=timeout, proxy=proxy,
+                                      force_route=force_route, static_only=False,
+                                      skip_static=True)
+
     if response is None:
         return meta
     base_url = getattr(response, "url", None) or url
