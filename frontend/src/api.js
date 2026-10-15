@@ -12,6 +12,23 @@ export function abortAll() {
   controllers.clear()
 }
 
+/* —— 401 引导 ——
+   服务端鉴权见 almond/webui/auth.py：浏览器靠 Cookie，Cookie 靠 ?token= 换。
+   只提示一次：看板一进来就并发发十几个 GET，全部 401 时连弹十几个框没法收。 */
+let prompting = false
+
+function promptToken() {
+  if (prompting) return
+  prompting = true
+  abortAll()
+  const given = window.prompt('需要访问令牌：\n（也可以直接把 ?token=… 加在地址后面重新打开页面）')
+  if (given && given.trim()) {
+    location.href = '/api/login?token=' + encodeURIComponent(given.trim())
+    return   // 整页跳走换 Cookie，不必复位 prompting
+  }
+  prompting = false
+}
+
 async function request(method, path, body, opts = {}) {
   const ctrl = opts.signal ? null : new AbortController()
   if (ctrl) controllers.add(ctrl)
@@ -27,6 +44,10 @@ async function request(method, path, body, opts = {}) {
   }
   try {
     const resp = await fetch(path, init)
+    if (resp.status === 401) {
+      promptToken()
+      return { ok: false, unauthorized: true, error: '未授权：缺少或错误的访问令牌' }
+    }
     const data = await resp.json()
     if (data && data.proxy_swapped) adoptProxy(data.proxy_swapped)
     return data
@@ -77,6 +98,10 @@ export async function fetchJob(path, body, signal) {
       if (sig && sig.aborted) return { ok: false, error: 'AbortError', aborted: true }
       const poll = await fetch(statusUrl, { signal: sig })
       if (poll.status === 200) return await poll.json()
+      if (poll.status === 401) {
+        promptToken()
+        return { ok: false, unauthorized: true, error: '未授权：缺少或错误的访问令牌' }
+      }
       if (poll.status === 204) {
         await new Promise((r) => setTimeout(r, POLL_MS))
         continue

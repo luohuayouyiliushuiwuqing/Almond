@@ -250,6 +250,35 @@ export async function removeRecord(record) {
   }
 }
 
+/* 批量删除。这段循环原先长在 SelectBar.jsx 里、自己 fetch() 再直接改 store，
+   绕开 api.js 就同时绕开了 401 引导与 abortAll —— 收回来的正是那个例外。 */
+export async function removeSelected() {
+  const urls = [...store.selectedUrls]
+  if (!urls.length) return
+  if (!window.confirm(`确定删除选中的 ${urls.length} 条记录？`)) return
+  let ok = 0
+  let fail = 0
+  for (const url of urls) {
+    try {
+      const data = await apiDel('/api/record?url=' + encodeURIComponent(url))
+      if (data.ok) {
+        store.records = store.records.filter((r) => r.url !== url)
+        store.selectedUrls.delete(url)
+        ok++
+      } else {
+        fail++
+      }
+      // 令牌失效时别再往下发剩下那几十个必然失败的请求（401 引导已在 api.js 里触发）
+      if (data.unauthorized) break
+    } catch {
+      fail++
+    }
+  }
+  update({ records: store.records.slice(), selectedUrls: new Set(store.selectedUrls) })
+  if (fail) setStatus(`已删除 ${ok} 条，失败 ${fail} 条`, 'err')
+  else setStatus(`已删除 ${ok} 条`)
+}
+
 /* ---------- 域名子页路由 ---------- */
 const HASH_PREFIX = '#/domain/'
 export function goToDomain(domain) {

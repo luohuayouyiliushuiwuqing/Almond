@@ -3,16 +3,26 @@
 原先散在 Handler 的 `_send_json`/`_read_json` 与各分支手写的
 「网址必须以 http:// 或 https:// 开头」「缺少 x 或 y」——这里收拢一份。
 api_* 处理函数拿到的 `h` 是 Handler 实例，写响应走 `send_json(h, ...)`。
+
+抓取目标的网址校验**不在这里**，在 `almond/core/urlguard.py`：那条政策 `fetcher`
+也要用，而 core 不能反向 import webui，所以只能落在下面一层。
 """
 
 import json
 
 
-def send_json(h, payload: dict, status: int = 200) -> None:
-    """写 JSON 响应（原 Handler._send_json 的实现）。"""
+def send_json(h, payload: dict, status: int = 200, extra_headers=None) -> None:
+    """写 JSON 响应（原 Handler._send_json 的实现）。
+
+    `extra_headers` 是 `[(名字, 值), …]`——给需要随响应一起发头的场景用
+    （如登出时要下发清 Cookie 的 `Set-Cookie`），免得调用方自己抢在
+    `send_response` 之前调 `send_header`：那个顺序会把状态线挤掉，连接上就成垃圾字节了。
+    """
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     h.send_response(status)
     h.send_header("Content-Type", "application/json; charset=utf-8")
+    for name, value in extra_headers or ():
+        h.send_header(name, value)
     h.send_header("Content-Length", str(len(body)))
     h.end_headers()
     h.wfile.write(body)
@@ -37,13 +47,6 @@ def read_json(h) -> dict | None:
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
     return data if isinstance(data, dict) else None
-
-
-def require_http_url(value) -> str | None:
-    """校验 http(s) 网址：合法返回 None，否则返回错误文案。"""
-    if not (value or "").strip().startswith(("http://", "https://")):
-        return "网址必须以 http:// 或 https:// 开头"
-    return None
 
 
 def require_fields(body: dict, *keys) -> str | None:

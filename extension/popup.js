@@ -5,6 +5,7 @@
 
 let boardUrl = DEFAULT_BOARD_URL;   // 来自 defaults.js；storage 读不到时兜底
 let closeAfter = false;             // 收藏成功后是否关标签页（勾选即记住）
+let token = "";                     // 看板开了鉴权才需要；走 X-Token 头，不用 Cookie
 
 function $(id) {
   return document.getElementById(id);
@@ -37,20 +38,26 @@ function isCollectible(u) {
 }
 
 async function loadSettings() {
-  const data = await chrome.storage.local.get(["boardUrl", "closeAfter"]);
+  const data = await chrome.storage.local.get(["boardUrl", "closeAfter", "token"]);
   const saved = (data.boardUrl || "").trim();
   boardUrl = saved || DEFAULT_BOARD_URL;
   $("boardUrl").value = boardUrl;
   closeAfter = !!data.closeAfter;
   $("closeAfter").checked = closeAfter;
+  token = (data.token || "").trim();
+  $("token").value = token;
 }
 
 /* 单次 POST、不分片（300 条约 60~150KB，服务端一个事务 <10ms）；
    空列表不发——服务端会 400「缺少 items」，调用方先拦 */
 async function postItems(items) {
+  const headers = { "Content-Type": "application/json" };
+  // Cookie 在这里带不动：popup 的源是 chrome-extension://，对看板地址属跨站请求，
+  // 而会话 Cookie 是 SameSite=Lax（跨站不发），只有显式头能过鉴权（见 almond/webui/auth.py）
+  if (token) headers["X-Token"] = token;
   const resp = await fetch(`${boardUrl}/api/records/quick`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ items }),
   });
   return resp.json();
@@ -70,7 +77,12 @@ async function submit(items) {
     return false;
   }
   if (!data.ok) {
-    setStatus("看板返回错误：" + (data.error || `HTTP ${data.status || "?"}`), "err");
+    setStatus(
+      data.unauthorized
+        ? "鉴权失败：看板启用了 token，请在下方「访问令牌」里填上"
+        : "看板返回错误：" + (data.error || `HTTP ${data.status || "?"}`),
+      "err"
+    );
     return false;
   }
   setStatus(`新增 ${data.inserted}，跳过 ${data.skipped}`, "ok");
@@ -179,7 +191,7 @@ async function saveAll() {
   }
 }
 
-/* ---------- 看板地址设置 ---------- */
+/* ---------- 看板地址与访问令牌 ---------- */
 
 async function saveUrl() {
   const raw = $("boardUrl").value.trim().replace(/\/+$/, "");
@@ -187,9 +199,11 @@ async function saveUrl() {
     setStatus("地址须以 http:// 或 https:// 开头", "err");
     return;
   }
-  await chrome.storage.local.set({ boardUrl: raw });
+  const given = $("token").value.trim();
+  await chrome.storage.local.set({ boardUrl: raw, token: given });
   boardUrl = raw;
-  setStatus("地址已保存", "ok");
+  token = given;
+  setStatus(given ? "地址与令牌已保存" : "地址已保存（令牌留空 = 请求不带 X-Token）", "ok");
 }
 
 /* ---------- 初始化 ---------- */

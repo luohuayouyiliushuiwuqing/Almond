@@ -53,7 +53,7 @@ class TestGetters(_boot.AlmondTestCase):
 
     def test_fetch_config_defaults_for_unknown(self):
         cfg = domains.get_domain_fetch_config("https://unknown.io/a")
-        self.assertEqual(cfg, {"detail_selector": "", "cover": None})
+        self.assertEqual(cfg, {"detail_selector": "", "detail_mode": "", "cover": None})
 
 
 class TestReplaceDomain(_boot.AlmondTestCase):

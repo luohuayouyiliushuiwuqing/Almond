@@ -14,15 +14,18 @@ from almond.core.log import logger
 from almond.core.proxy import ensure_working_proxy, forced_route, resolve_proxy
 from almond.core.records import upsert_record_if_epoch
 from almond.core.storage import storage_epoch
+from almond.core.urlguard import require_public_url
 from almond.webui import imgproxy
-from almond.webui.api_util import require_http_url, send_json
+from almond.webui.api_util import send_json
 
 
 def fetch_one(h, qs: dict, body: dict) -> None:
     """POST /api/fetch：异步提交抓取，立即返回 job_id（结果经 /api/fetch/status 收）。"""
     url = (body.get("url") or "").strip()
     global_proxy = (body.get("proxy") or "").strip() or ""
-    err = require_http_url(url)
+    # 这个入口会让**服务器**去请求调用方给的地址，所以除 scheme 外还要拦内网目标
+    # （政策与「为什么没做 DNS 重绑定防护」都写在 almond/core/urlguard.py）
+    err = require_public_url(url)
     if err:
         send_json(h, {"ok": False, "error": err}, 400)
         return
@@ -122,8 +125,10 @@ def get_img(h, qs: dict, body: dict) -> None:
     """GET /api/img：服务端代抓图片：解析代理 → 交给 imgproxy 取字节 → 写响应。"""
     src = (qs.get("src") or [""])[0]
     global_proxy = (qs.get("proxy") or [""])[0].strip() or ""
-    if require_http_url(src):
-        h.send_error(400)
+    # 同 /api/fetch：这是第二个「让服务器去请求任意地址」的入口，一并收口
+    err = require_public_url(src)
+    if err:
+        send_json(h, {"ok": False, "error": err}, 400)
         return
     proxy = resolve_proxy(src, global_proxy)
     status, body_bytes, ctype = imgproxy.handle_img(src, proxy)

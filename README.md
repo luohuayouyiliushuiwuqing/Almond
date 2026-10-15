@@ -13,6 +13,7 @@
 - **域名分组与代理映射**：按根域名分组（零散域名收进「其他」），URL 通配符规则 + 域名级开关只表达「要不要走代理」，地址统一填一次；走代理的域名在侧栏带「代理」徽标
 - **服务端图片代理 + 本地缓存**：缩略图与 favicon 经本地代理加载（避免浏览器直连外站被重置），结果落盘缓存，二次加载不再走网络
 - **SQLite 存储**：`metadata.db`（存放位置可在界面「存储」面板里点选迁移），合并规则保证抓取失败不覆盖已有数据和手动补充的标题
+- **默认只对本机开放**：绑定 `127.0.0.1:4000`；对外监听必须配 token，否则拒绝启动。鉴权双凭证——浏览器换会话 Cookie、脚本与插件带 `X-Token` 头；服务端出网目标一律过滤内网 / 保留段（含云元数据地址）
 
 ## 目录结构
 
@@ -33,12 +34,14 @@ Almond/
 │   │   ├── fetch_hints.py · hints_strategy.py · hints_cookie.py
 │   │   │                  # 经验缓存本体 / 策略成绩册 / Cookie 层
 │   │   ├── proxy.py       # 代理唯一入口：规则匹配 + 端口探测顶替 + 定时刷新
+│   │   ├── urlguard.py    # 出网地址策略：拦掉内网 / 保留 / 组播段（SSRF 兜底，抓取前最后一道）
 │   │   ├── storage.py · db.py         # 存储目录与纪元 / SQLite 连接与迁移
 │   │   ├── records.py · domains.py    # 记录标签规则 CRUD / 域名配置与重置
 │   │   └── fields.py · hostutil.py · log.py
 │   │                      # 「标签: 值」解析 / 根域名与国内判定 / 日志
-│   └── webui/             # 唯一界面后端：Raindrop 看板（默认 0.0.0.0:4000）
-│       ├── server.py      # 路由表合并 + 薄 Handler + 启动入口
+│   └── webui/             # 唯一界面后端：Raindrop 看板（默认 127.0.0.1:4000）
+│       ├── server.py      # 路由表合并 + 鉴权闸 + 薄 Handler + 启动入口
+│       ├── auth.py        # token 鉴权 + 会话 Cookie（`?token=` 换 Cookie / `X-Token` 头）
 │       ├── api_{fetch,records,domains,proxy,storage}.py   # 按资源的 REST 处理器
 │       ├── api_util.py    # 参数校验与 JSON 响应助手
 │       ├── staticfiles.py · imgproxy.py · fsbrowse.py
@@ -97,14 +100,16 @@ npm run build
 ### 看板（主界面）
 
 ```bash
-almond-webui                              # 默认 http://0.0.0.0:4000/
+almond-webui                              # 默认 http://127.0.0.1:4000/（只监听本机，此时无需 token）
 almond-webui --port 8000                  # 自定义端口
-almond-webui --host 127.0.0.1             # 只监听本机（不对外暴露）
-almond-webui --host 0.0.0.0 --port 4000   # 显式指定
+almond-webui --host 0.0.0.0 --token <值>  # 对外监听：token 必填，否则拒绝启动（退出码 2）
+ALMOND_TOKEN=<值> almond-webui --host 0.0.0.0   # 同一 token 的推荐给法——不进 ps 与 shell history
 
 # 免安装方式（必须在仓库根目录执行）
-python -m almond.webui.server [--host 0.0.0.0] [--port 4000]
+python -m almond.webui.server [--host 127.0.0.1] [--port 4000] [--token <值>]
 ```
+
+- 启用了 token 时，第一次访问把 token 挂在地址后即可：`http://<地址>:4000/app/?token=<值>`——服务端换成 30 天的会话 Cookie 并把 token 从地址栏带走（`302` 到 `/app/`）。之后 `curl` / 脚本带 `X-Token: <值>` 头即可。
 
 - 顶部粘贴 URL 回车「添加」；右侧搜索框过滤；`☰` 收起 / 展开左侧栏
 - 左侧栏按**域名**与**标签**筛选看板：条目数 <10 的零散域名收进「其他」，走代理的域名带「代理」徽标
@@ -123,10 +128,12 @@ python -m almond.webui.server [--host 0.0.0.0] [--port 4000]
 
 ## API（webui）
 
-全部接口**无鉴权**，风险见下方「⚠ 无鉴权」。
+除 `/api/login` 外，全部 `/api/*` 都要凭证（未配 token 时不设闸）。缺凭证或凭证错回 **401** `{ok: false, unauthorized: true}`：浏览器由前端弹窗引导补 token，脚本 / 插件带 `X-Token` 头。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
+| GET | `/api/login?token=…` | **唯一免鉴权接口**：token 正确则下发会话 Cookie 并 302 回 `/app/`（把 token 从地址栏、浏览器历史与反代访问日志里带走）；错误回 401。Cookie 为 `HttpOnly` + `SameSite=Lax`、30 天；经反代终结 TLS 时（`X-Forwarded-Proto: https`）追加 `Secure` |
+| POST | `/api/logout` | 清会话 Cookie。仍需先过鉴权，免得被当成免费的「这个 token 对不对」探针。**注意**：Cookie 值是 `sha256("almond-session:" + token)`，服务端不保存会话状态，所以登出只对当前浏览器生效——要真正作废一个已泄漏的 Cookie，只能换 token 重启 |
 | GET | `/api/records` | 全部记录（含标签与 `fetched` 快照标记）+ `epoch`（当前存储纪元，抓取请求要带上） |
 | POST | `/api/fetch` | `{url, proxy, epoch}` **异步提交**，立即回 `{ok: true, job_id}`；结果由 `GET /api/fetch/status?job_id=…` 收（前端延后 1s 开轮询、每 500ms 一次、5 分钟封顶）。抓取跑在**子进程**（切库即硬杀，不占 Web 进程），按域名配置应用 `detail_selector` / `detail_mode` / `cover`；**完成后的那份响应**才带合并入库的记录与 `success`（**本次**抓取是否成功——失败按合并规则不覆盖已有内容，`record.success` 可能仍是旧值）；`epoch` 与当前纪元不符（切库后才到达的旧请求）直接作废回 `stale`，一个包都不发；本机代理端口转发不通时自动顶替为可用端口，顶替结果在**提交响应**里就经 `proxy_swapped` 回传，不必等轮询 |
 | GET | `/api/fetch/status?job_id=…` | 异步抓取结果查询（供前端轮询）：**200** 任务完成、返回与 `/api/fetch` 同格式的完整结果；**204** 仍在跑、无 body；**404** `job_id` 无效或已被切库清掉；结果属于旧纪元的回 `stale: true` 并作废 |
@@ -161,6 +168,8 @@ python -m almond.webui.server [--host 0.0.0.0] [--port 4000]
 - **合并规则**：按 URL 去重；抓取失败保留原记录；页面无标题时不覆盖手动补充的标题
 - **数据文件**：本地私有数据（`metadata.db`、图片缓存 `cache/img/` 等）统一放在**存储目录**——默认仓库根（已 gitignore），可在界面「存储」面板点选目录切换（不迁移，立即生效）；位置记录在仓库根 `config.json`（已 gitignore）。非 editable 安装可用环境变量 `ALMOND_DATA_DIR` 指定基础目录
 - **入口约定**：只支持 `almond-webui` 或 `python -m almond.webui.server`（后者需在仓库根目录执行）；不要直接 `python almond/webui/server.py`，它依赖 `sys.path`，行为随安装状态变化
-- **监听地址**：看板默认 `0.0.0.0:4000`（所有网卡，便于远程访问），可用 `--host` / `--port` 覆盖
-- **⚠ 无鉴权**：上表全部接口都对外可达。`POST /api/fetch`、`POST /api/confirm` 与 `GET /api/img` 会让**服务器**去抓取任意 URL（SSRF），`DELETE /api/record` 可直接删库，`GET /api/fs/list` 可列出服务器任意目录、`POST /api/storage-dir` 可把数据库搬走或重建。绑到 `0.0.0.0` 意味着任何能连上该端口的人都能调用这些接口。仅本机使用请加 `--host 127.0.0.1`；确需对外暴露时，在云安全组 / 防火墙上只放行可信 IP（云主机上还需放行安全组与 `firewalld`/`ufw` 的 4000 端口，否则外部访问会超时）；token 鉴权见 [docs/TODO.md](docs/TODO.md) 第 2 项
+- **监听地址**：看板默认 `127.0.0.1:4000`，只对本机可见；`--host` / `--port` 可覆盖。**绑非回环地址又没配 token 一律拒绝启动**（退出码 2）——这类启动没有「先跑起来再说」的余地
+- **鉴权**：token 由 `--token` 或环境变量 `ALMOND_TOKEN` 给出（推荐后者，`--token` 的值会进 `ps` 与 shell history）。两种凭证：浏览器用**会话 Cookie**（`GET /api/login?token=…`，或在任意页面地址后挂 `?token=` 换 Cookie），脚本与浏览器插件用 **`X-Token` 头**——插件 popup 的源是 `chrome-extension://…`，跨站请求带不动 `SameSite=Lax` 的 Cookie，只有显式头能过闸。**未配 token 时完全不设闸**，回环监听下这是有意的省事。经 Caddy / nginx 反代时，`Secure` 标志只看 `X-Forwarded-Proto`，不看连接本身（反代终结 TLS 时后端拿到的是明文连接）
+- **SSRF 与出网策略**：`POST /api/fetch`、`POST /api/confirm` 与 `GET /api/img` 会让**服务器**去请求调用方给的任意地址，所以统一过 `almond/core/urlguard.py`：非 http(s)、缺主机名、解析后落在回环 / 私网 / 链路本地 / 保留 / 组播段的地址一律拒绝，`169.254.169.254`（云元数据）在内。`/api/fetch` 与 `/api/img` 直接调它回 **400** 并说明拦下原因；`/api/confirm` 以及一切别的路径（含 `confirm.py` 这类直接从库里取 URL 灌进抓取池的）由 `fetcher.fetch_page()` 开头那道**兜底**拦下——写日志、不发起抓取。确实要抓内网服务时设 `ALMOND_ALLOW_PRIVATE_URLS=1` 放行。**已知不足**：策略在「解析 DNS」之后判定，而抓取在自己内部又解析一次，因此理论上存在 DNS 重绑定窗口——本策略挡的是直白的内网探测，不是蓄意的重绑定攻击；上公网仍应在反代 / 安全组后
+- **其余对外风险**（token 只挡住无凭证者，不区分持凭证的人）：`GET /api/fs/list` 可列出服务器任意目录、`POST /api/storage-dir` 可把数据库指向别处；云主机上还要同时放行安全组与 `firewalld`/`ufw` 的对应端口，否则外部访问会超时
 - **调试抓取链**：抓取日志会打印到启动命令所在的终端

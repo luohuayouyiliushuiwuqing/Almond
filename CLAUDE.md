@@ -58,7 +58,9 @@ npm --prefix frontend run dev               # :5173, /api proxied to the Python 
 npm --prefix frontend run build             # → almond/webui/dist/
 
 # run
-almond-webui [--host 0.0.0.0] [--port 4000]   # board → http://0.0.0.0:4000/
+almond-webui                                  # 127.0.0.1:4000, no auth gate (loopback only)
+almond-webui --host 0.0.0.0 --token <v>       # public bind REQUIRES a token, else exit code 2
+ALMOND_TOKEN=<v> almond-webui --host 0.0.0.0  # preferred — token stays out of `ps` / shell history
 python -m almond.webui.server [...]           # same, without installing (from repo root)
 
 # stop the board, including fetched browser process trees (port 4000)
@@ -97,10 +99,11 @@ its「分层规范」section is binding):
 ```
 frontend/src/               React 18 SPA，Vite 构建 → almond/webui/dist/，后端挂在 /app
   store.js  唯一可变状态 + 全部业务动作（useSyncExternalStore + version 计数驱动重渲）
-  api.js    统一请求层（fetch() 应只出现在这里：epoch 注入 / 中止登记 / proxy_swapped / fetchJob 轮询）
+  api.js    统一请求层（fetch() 只出现在这里：epoch 注入 / 中止登记 / proxy_swapped / fetchJob 轮询 / 401 引导取 token）
   ui.js     模态总线（openModal(type, payload)，App 统一渲染弹层）
     ↓ HTTP / REST
-almond/webui/server.py      薄 Handler：路由表合并 + dispatch + 兜底
+almond/webui/server.py      薄 Handler：路由表合并 + 鉴权闸 + dispatch + 兜底
+almond/webui/auth.py        token 校验 + 会话 Cookie（Cookie 给浏览器、X-Token 给脚本/插件）+ 登录登出
 almond/webui/api_*.py       按资源 REST 处理器（fetch/records/domains/proxy/storage）
 almond/webui/{api_util,staticfiles,imgproxy,fsbrowse}.py  校验助手 / 静态 / 图片 / 目录
     ↓
@@ -110,6 +113,7 @@ almond/core/confirm.py      方案确认：自动抓取前先试出每个域名�
 almond/core/fetch_hints.py  经验缓存本体：JSON 存取 + 效应通道 + 纪元门 + 可达性 + plan/confirm
 almond/core/hints_strategy.py 策略成绩册 · hints_cookie.py Cookie 层
 almond/core/proxy.py        代理唯一入口：规则匹配 + resolve_proxy/forced_route + 转发健康 + 端口顶替 + 定时刷新
+almond/core/urlguard.py     出网地址策略（SSRF）：require_public_url，fetch_page 与 webui 三条触网入口共用
 almond/core/storage.py      存储目录 / 纪元 / SWITCH_LOCK · db.py SQLite 连接+迁移
 almond/core/records.py      记录/标签/规则 CRUD · domains.py 域名配置+重置
 almond/core/hostutil.py     根域名 + 国内判定 · fields.py「标签: 值」· log.py 日志
@@ -129,13 +133,22 @@ Invariants that must survive any edit:
   `upsert_record_if_epoch()` so late results never land in the new db.
 - **Frontend seams**: 可变状态只有 `store.js` 一处，组件经 `useStore()` 读、调 `store.js` 导出的动作写，
   不在组件里另存看板数据。`api.js ⇄ store.js` 是有意相互 import——双方都只在函数调用期取对方导出，
-  改成模块求值期解引用会拿到 undefined。⚠ 有一处**尚未收敛**的例外：`SelectBar.jsx` 的批量删除自己
-  循环 `fetch('DELETE /api/record')` 并直接改 `s.records` / `s.selectedUrls`，绕开了 `api.js` 与 store
-  动作（因此拿不到 epoch 注入与请求中止）。新增请求走 `api.js`，不要照抄这里。
+  改成模块求值期解引用会拿到 undefined。所有 HTTP 只经 `api.js`（含批量删除——它曾是 `SelectBar.jsx`
+  里的裸 `fetch` 循环，已收进 `store.js` 的 `removeSelected()`）：绕开 `api.js` 就同时绕开了
+  epoch 注入、`abortAll()` 与 401 引导。
 - **`requirements.txt` is a build input** (pyproject dynamic deps): only full-line `#` comments and
   `name==ver` lines — no inline comments, no `-i`/`-r` option lines, or the build breaks.
-- **No auth**: every `/api/*` is open (SSRF via `/api/fetch` + `/api/img`, db deletable). Use
-  `--host 127.0.0.1` for local-only use; anything else needs a firewall / reverse proxy in front.
+- **Auth is a bind-time property, not a per-peer check**: `--host` non-loopback without a token refuses
+  to start; once a token is set, `server._dispatch` gates every `/api/*` except `/api/login` (behind a
+  reverse proxy every peer looks like 127.0.0.1, so per-request peer checks would be meaningless).
+  Cookies authenticate the browser (`<img src>` cannot carry a header); `X-Token` authenticates scripts
+  and the MV3 popup, whose `chrome-extension://` origin cannot carry a `SameSite=Lax` cookie. Emit the
+  401 **after** `read_json()` drains the body or keep-alive connections desync.
+- **SSRF policy lives in core** (`almond/core/urlguard.py`): `almond/core/` must never import
+  `almond/webui/`, so the check sits next to `proxy.py` and is called both by the webui handlers (crisp
+  400s) and by `fetcher.fetch_page()` as the backstop — `confirm.py` feeds DB-sourced URLs straight into
+  the fetchpool, bypassing the handlers. It is not a rebinding defense: the IP is checked at resolve
+  time, then resolved again inside the fetch.
 
 ## Storage layout
 

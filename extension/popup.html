@@ -22,12 +22,15 @@
   </section>
 
   <details id="settings">
-    <summary>看板地址</summary>
+    <summary>看板地址与令牌</summary>
     <div class="row">
       <input id="boardUrl" spellcheck="false" placeholder="http://127.0.0.1:4000">
       <button id="saveUrl">保存</button>
     </div>
-    <div class="hint">默认本机 4000；保存时去掉尾部 <code>/</code>，仅接受 http(s) 地址。</div>
+    <div class="row">
+      <input id="token" type="password" autocomplete="off" placeholder="访问令牌（看板没开鉴权就留空）">
+    </div>
+    <div class="hint">默认本机 4000；保存时去掉尾部 <code>/</code>，仅接受 http(s) 地址。令牌只在服务端启用鉴权后才需要，请求走 <code>X-Token</code> 头（Cookie 跨站带不过来）。</div>
   </details>
 
   <!-- CSP 是 script-src 'self'：内联 script 会被静默拦掉（装得上、点了没反应），必须外链 -->

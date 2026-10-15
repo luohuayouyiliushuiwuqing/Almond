@@ -13,6 +13,7 @@ from almond.core.fields import extract_fields, extract_tags
 from almond.core.hostutil import is_domestic
 from almond.core.log import logger
 from almond.core.proxy import ensure_working_proxy, proxy_reachable
+from almond.core.urlguard import require_public_url
 
 # 详情区块选择器：抓取成功后顺带解析「标签: 值」字段，无匹配时 details 为空列表
 DETAIL_SELECTOR = ".space-y-2 > *"
@@ -121,6 +122,13 @@ def fetch_page(url: str, timeout: int = 20, proxy: str | None = None,
     国内旁路优先于一切代理规则（`is_domestic`）：国内站就算 force_route="proxy"
     也直连——与 `resolve_proxy` 的结论保持一致。
     """
+    # 兜底闸门：/api/fetch 与 /api/img 在 webui 层就拦过一道，但 confirm 阶段的测试
+    # 抓取是从库里取历史网址直接投递子进程的，不经过那两个入口 —— 政策必须落在
+    # 这张唯一漏斗上，否则「入库时没人拦、抓取时才拦」的洞仍在。
+    blocked = require_public_url(url)
+    if blocked:
+        logger.warning(f"目标被安全策略拦下，不发起抓取：{blocked}")
+        return None
     fetch_hints.enter_fetch()   # 绑定存储纪元：抓取期间切库 → 本函数后续所有缓存写入作废
     host = urlparse(url).hostname
     if force_route == "direct":
