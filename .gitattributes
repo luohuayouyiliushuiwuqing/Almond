@@ -13,3 +13,8 @@
 *.woff binary
 *.woff2 binary
 *.pyc binary
+
+# Windows 批处理文件必须 CRLF + UTF-8 BOM，cmd 才能正确分行与识别中文；
+# 不能用全局 text/lf/无 BOM（否则中文行被误当命令）。按二进制原样存储/检出，
+# 不被 git 规范化换行或剥离 BOM。
+*.bat binary
