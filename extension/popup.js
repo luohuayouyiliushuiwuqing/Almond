@@ -92,7 +92,9 @@ async function submit(items) {
 /* ---------- 收藏当前页 ---------- */
 
 /* 在点击那一刻注入：自包含（函数体被序列化，引不到 popup 的闭包），
-   host_permissions 已保证注入可用，activeTab 只是兜底。返回值取 results[0]?.result */
+   host_permissions 已保证注入可用，activeTab 只是兜底。返回值取 results[0]?.result。
+   页面此刻就在内存里，直接读 OG 元数据（og:title / og:image / 描述 / 站名 /
+   favicon），连同交回前端——省掉服务端二次抓取。 */
 function extractMeta() {
   const abs = (v) => {
     if (!v) return "";
@@ -103,12 +105,35 @@ function extractMeta() {
       return "";
     }
   };
-  const og =
-    document.querySelector('meta[property="og:image"]')?.content ||
-    document.querySelector('meta[name="twitter:image"]')?.content ||
+  const meta = (sel) => document.querySelector(sel)?.content || "";
+  const title =
+    meta('meta[property="og:title"]') ||
+    meta('meta[name="twitter:title"]') ||
+    (document.title || "").trim();
+  const thumbnail =
+    meta('meta[property="og:image"]') ||
+    meta('meta[name="twitter:image"]') ||
+    meta('meta[name="twitter:image:src"]') || // 更老的 Twitter 规范变体
     "";
-  const icon = document.querySelector('link[rel~="icon"]')?.href || "";
-  return { thumbnail: abs(og), favicon: abs(icon) };
+  const description =
+    meta('meta[property="og:description"]') ||
+    meta('meta[name="twitter:description"]') ||
+    "";
+  const siteName = meta('meta[property="og:site_name"]') || "";
+  const icon =
+    document.querySelector('link[rel~="icon"]')?.href ||
+    document.querySelector('link[rel="apple-touch-icon"]')?.href ||
+    "";
+  // 描述 / 站名顺手塞进 details，详情弹层就有内容；拿不到就留空由服务端按需补抓
+  const details = [];
+  if (description) details.push({ label: "描述", value: description });
+  if (siteName) details.push({ label: "站点", value: siteName });
+  return {
+    title: title.trim(),
+    thumbnail: abs(thumbnail),
+    favicon: abs(icon),
+    details,
+  };
 }
 
 async function saveCurrent() {
@@ -124,31 +149,36 @@ async function saveCurrent() {
       setStatus("本地回环页（127.0.0.1 / localhost）跳过，不收藏", "err");
       return;
     }
-    let extracted = { thumbnail: "", favicon: "" };
-    let degraded = false;
+    let extracted = { title: "", thumbnail: "", favicon: "", details: [] };
+    let captured = false;   // 注入成功 = 已从打开的页面直接读到 OG 元数据
     try {
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: extractMeta,
       });
-      extracted = (results && results[0] && results[0].result) || extracted;
+      const ex = (results && results[0] && results[0].result) || null;
+      if (ex) {
+        extracted = ex;
+        captured = true;
+      }
     } catch (e) {
       // PDF 阅读器、应用商店等注入失败 → 降级成只有 title + favicon 仍可收藏
-      degraded = true;
     }
     const favicon =
       extracted.favicon || (isHttpUrl(tab.favIconUrl) ? tab.favIconUrl : "");
     const ok = await submit([
       {
         url: tab.url,
-        title: tab.title || "",
+        title: extracted.title || (tab.title || ""),
         thumbnail: extracted.thumbnail || "",
         favicon,
+        details: extracted.details || [],
         tags: [],
+        captured,   // 告诉服务端：元数据已在浏览器端拿到，无需二次抓取
       },
     ]);
-    if (ok && degraded) {
-      setStatus("已收藏（读不到页面元数据，仅标题/图标）", "ok");
+    if (ok && !captured) {
+      setStatus("已收藏（读不到页面元数据，仅标题/图标，稍后补抓）", "ok");
     }
     /* 关当前标签会让 popup 一起消失，必须放在最后一步 */
     if (ok && closeAfter) {
@@ -161,6 +191,51 @@ async function saveCurrent() {
 
 /* ---------- 批量收藏当前窗口标签 ---------- */
 
+/* 单标签注入：从已打开的页面直接读 OG 元数据（title / image / 描述 / 站名 /
+   favicon）。注入失败（PDF 阅读器、应用商店、强 CSP）→ 降级成仅标题 + 图标，
+   captured=false 让服务端按需补抓。 */
+async function extractFromTab(tab) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: extractMeta,
+    });
+    const ex = (results && results[0] && results[0].result) || null;
+    if (ex) {
+      return {
+        url: tab.url,
+        title: ex.title || (tab.title || ""),
+        thumbnail: ex.thumbnail || "",
+        favicon: ex.favicon || (isHttpUrl(tab.favIconUrl) ? tab.favIconUrl : ""),
+        details: ex.details || [],
+        tags: [],
+        captured: true,   // 已读到页面 OG 元数据，前端直传数据库，无需二次抓取
+      };
+    }
+  } catch (e) {
+    // 落到下面的降级分支
+  }
+  return {
+    url: tab.url,
+    title: tab.title || "",
+    thumbnail: "",
+    favicon: isHttpUrl(tab.favIconUrl) ? tab.favIconUrl : "",
+    details: [],
+    tags: [],
+    captured: false,
+  };
+}
+
+/* 限并发执行：批量注入几十个标签页时避免一次性铺开把浏览器打满 */
+async function mapPool(arr, fn, size = 5) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) {
+    const slice = arr.slice(i, i + size);
+    out.push(...(await Promise.all(slice.map(fn))));
+  }
+  return out;
+}
+
 async function collectibleTabs() {
   const tabs = await chrome.tabs.query({ currentWindow: true });
   return tabs.filter((t) => isCollectible(t.url));
@@ -171,18 +246,11 @@ async function saveAll() {
   btn.disabled = true;
   try {
     const tabs = await collectibleTabs();
-    /* 只取 title + 过滤后的 favIconUrl——不注入（那要给每个标签页各注入一次），
-       缺封面没关系，看板里点「详情 / 重新抓取」会补上 */
-    const ok = await submit(
-      tabs.map((t) => ({
-        url: t.url,
-        title: t.title || "",
-        thumbnail: "",
-        favicon: isHttpUrl(t.favIconUrl) ? t.favIconUrl : "",
-        tags: [],
-      }))
-    );
+    /* 每个标签页都还开着，直接注入读 OG 元数据（title / image）交给数据库，
+       不用等服务端二次抓取；注入失败的标签降级为仅标题/图标。 */
+    const items = await mapPool(tabs, extractFromTab, 5);
     /* 全收成功才关；关光后窗口若空会连 popup 一起关掉，同样是最后一步 */
+    const ok = await submit(items);
     if (ok && closeAfter && tabs.length) {
       await chrome.tabs.remove(tabs.map((t) => t.id));
     }

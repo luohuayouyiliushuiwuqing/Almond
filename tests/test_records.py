@@ -81,6 +81,38 @@ class TestPending(_boot.AlmondTestCase):
         self.assertFalse(records.list_records()[0]["fetched"])             # 快照默认未抓取
 
 
+class TestQuickCaptured(_boot.AlmondTestCase):
+    def test_captured_marks_fetched_no_backfill(self):
+        # 插件已从打开的页面直接读到 OG 元数据 → fetched=1，不进补抓队列
+        res = records.insert_quick_records([{
+            "url": "https://cap.com/x",
+            "title": "OG 标题",
+            "thumbnail": "https://cap.com/og.png",
+            "favicon": "https://cap.com/f.ico",
+            "details": [{"label": "描述", "value": "一段摘要"}],
+            "captured": True,
+        }])
+        self.assertEqual(res, {"inserted": 1, "skipped": 0})
+        rec = records.list_records()[0]
+        self.assertTrue(rec["fetched"])                 # 视为已抓取
+        self.assertTrue(rec["success"])
+        self.assertEqual(rec["title"], "OG 标题")
+        self.assertEqual(rec["thumbnail"], "https://cap.com/og.png")
+        self.assertEqual(rec["details"], [{"label": "描述", "value": "一段摘要"}])
+        self.assertEqual(records.list_pending_urls(), [])  # 不再二次抓取
+
+    def test_non_captured_stays_unfetched(self):
+        # 仅 URL / 仅标题的导入（不带 captured）→ fetched=0，仍按需补抓
+        records.insert_quick_records([{"url": "https://nc.com/x", "title": "T"}])
+        self.assertFalse(records.list_records()[0]["fetched"])
+        self.assertEqual(records.list_pending_urls(), ["https://nc.com/x"])
+
+    def test_captured_false_is_explicit_no_fetch(self):
+        # captured 显式 false 也按未抓取处理（降级路径）
+        records.insert_quick_records([{"url": "https://d.com/x", "captured": False}])
+        self.assertFalse(records.list_records()[0]["fetched"])
+
+
 class TestTitleDelete(_boot.AlmondTestCase):
     def test_set_title(self):
         records.upsert_record(_meta("https://a.com/x", title="A"))
