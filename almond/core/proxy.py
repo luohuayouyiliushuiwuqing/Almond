@@ -5,7 +5,11 @@
 原先判定逻辑散在 server.effective_proxy、fetch_hints 健康层、records 规则匹配三处。
 
 本机端口探测：7889-7899 并行 TCP 扫描（`scan_open_ports`）——
-端口开着 ≠ 代理可用，可用性结论一律以**转发验证**为准。
+端口开着 ≠ 代理可用，可用性结论以**转发验证**为准：国内站点仅作诊断（能否 GET 到 200），
+国外可达性用 **GFW 阻断站点硬验证**（默认 google.com / youtube.com，urllib 默认严格校验 TLS
+证书）——端口开着但代理未真正转发时，请求会被 GFW 重置 / 代理返回无效证书 → 异常 → 判不通，
+从而根除「端口开着 / 被劫持错误页回显域名」造成的假阳性。（IP 回显类服务在国内常能直连到达，
+故不作为可用硬标准。）
 """
 
 import socket
@@ -27,19 +31,30 @@ _PROBE_TIMEOUT = 0.25  # 单端口 TCP 超时；并行执行，总耗时约等�
 
 # 转发健康缓存与探测（区别于 TCP 扫描：这里证明「能连到远程」）
 _PROXY_TTL_OK = 30      # 代理健康结果缓存：通过后 30s 内不再探测
-_PROXY_TTL_FAIL = 15    # 失败也缓存，避免一轮补抓每条都先花 2.5s 探测
-_PROXY_PROBE_TIMEOUT = 2.5
-# 探测地址：走 HTTPS（触发 CONNECT 隧道，最能证明代理能连到远程），两个目标兜底
-_PROXY_PROBE_TARGETS = (
-    "https://www.gstatic.com/generate_204",
-    "https://cp.cloudflare.com/generate_204",
-)
+_PROXY_TTL_FAIL = 15    # 失败也缓存，避免一轮补抓每条都先花数秒探测
+_PROXY_PROBE_TIMEOUT = 3.0
+
+# 国内目标（仅诊断）：国内站点本就直连旁路，不卡可用性；只测「能不能 GET 到 2xx」。
+_DOMESTIC_TARGETS = [
+    ("baidu", "https://www.baidu.com"),
+    ("bilibili", "https://www.bilibili.com"),
+]
+
+# 国外可达性的**硬标准**：经代理拉 GFW 阻断站点（默认 google.com / youtube.com）。
+# 这类站点在国内「没代理就打不开」；urllib 默认做严格 TLS 证书校验，因此端口开着
+# 但代理未真正转发时，请求会被 GFW 重置 / 代理返回无效证书 → 异常 → 判不通，
+# 绝不会被「端口在 / 错误页回显域名」误导。首个成功即停。
+_FOREIGN_TARGETS = [
+    ("google", "https://www.google.com"),
+    ("youtube", "https://www.youtube.com"),
+]
+_LAST_CONN_FP = None    # 连通性画像指纹：30s 刷新时画像不变则不重复打矩阵日志
 
 _LOCK = threading.RLock()                                   # 护 _HEALTH / _ENSURE
 _PROBE_LOCK = threading.Lock()                              # 只串行化网络探测本身
-_HEALTH: dict[str, tuple[bool, float]] = {}                 # 代理地址 → (是否可用, 探测时刻)
+_HEALTH: dict[str, tuple[dict, float]] = {}                 # 代理地址 → (连通性字典, 探测时刻)
 _ENSURE: dict | None = None                                 # {"in": 输入地址, "out": 顶替结果, "at": 时刻}
-_DETECT_TIMEOUT = 2.0     # 端口逐个验证转发的单端口超时（端口间并行，总耗时≈单端口）
+_DETECT_TIMEOUT = 3.0     # 端口逐个验证转发的单端口超时（端口间并行，总耗时≈单端口）
 _ENSURE_TTL = 20           # 「坏端口 → 顶替结论」缓存：一条补抓轮里只做一次完整探测
 
 
@@ -65,43 +80,84 @@ def scan_open_ports(host: str = "127.0.0.1") -> list[int]:
     return [p for p in results if p is not None]
 
 
-# ---------------------------------------------------------------- 转发健康
+def _reachable(proxy: str, url: str, timeout: float) -> bool:
+    """经代理能否 GET 到该站点（2xx/3xx 即算可达）。用于国内诊断，不卡可用性。"""
+    try:
+        opener = build_opener(ProxyHandler({"http": proxy, "https": proxy}))
+        resp = opener.open(url, timeout=timeout)
+        return 200 <= resp.status < 400
+    except Exception:        # noqa: BLE001 — 隧道失败/超时：算不可达
+        return False
 
-def _forward_probe(proxy: str, timeout: float) -> bool:
-    """经代理发起真实小请求：收到任何 HTTP 响应（含 4xx）都算代理能连到远程。"""
-    for target in _PROXY_PROBE_TARGETS:
+
+def _foreign_results(proxy: str, timeout: float) -> dict:
+    """经代理拉 GFW 阻断站点：返回 {服务名: 是否 2xx 且 TLS 证书校验通过}。
+
+    urllib 默认校验目标证书——代理若未真正转发（GFW 重置 / 返回无效证书的错误页），
+    会抛连接或 SSL 异常被捕获为 False；只有真能到达真实站点才判通。首个成功即停。
+    """
+    opener = build_opener(ProxyHandler({"http": proxy, "https": proxy}))
+    res: dict = {}
+    for svc, url in _FOREIGN_TARGETS:
+        ok = False
         try:
-            opener = build_opener(ProxyHandler({"http": proxy, "https": proxy}))
-            opener.open(target, timeout=timeout)
-            return True
-        except HTTPError:
-            return True          # 对端回了状态码 → 隧道是通的
-        except Exception:        # noqa: BLE001 — 隧道失败/超时 → 换一个探测点
-            continue
-    return False
+            resp = opener.open(url, timeout=timeout)
+            ok = 200 <= resp.status < 400
+        except Exception:        # noqa: BLE001 — 连接失败 / SSL 校验不过 / 超时 均算不通
+            ok = False
+        res[svc] = ok
+        if ok:
+            break
+    return res
+
+
+def _probe_connectivity(proxy: str, timeout: float) -> dict:
+    """经代理分别探国内 / 国外连通性。
+
+    返回 {domestic:{...}, foreign:{...}}：
+    - domestic：仅诊断（能否 GET 到 2xx），国内站本就直连旁路不卡它；
+    - foreign：各 GFW 阻断站点是否经代理 2xx 可达（硬标准）。
+    """
+    out: dict = {"domestic": {}, "foreign": {}}
+    for key, url in _DOMESTIC_TARGETS:
+        out["domestic"][key] = _reachable(proxy, url, timeout)
+    out["foreign"] = _foreign_results(proxy, timeout)
+    return out
+
+
+def _is_usable(conn: dict) -> bool:
+    """代理是否可用：以「能连上国外（任一 GFW 阻断站点经代理 2xx 可达）」为硬标准。"""
+    return any(conn.get("foreign", {}).values())
+
+
+def _forward_probe(proxy: str, timeout: float) -> dict:
+    """转发验证：返回连通性字典（兼容旧调用点，等价 _probe_connectivity）。"""
+    return _probe_connectivity(proxy, timeout)
 
 
 def proxy_reachable(proxy: str, timeout: float = _PROXY_PROBE_TIMEOUT) -> bool:
     """代理转发是否可用（带 TTL 缓存：通过 30s / 失败 15s）。
 
-    区别于端口探测：端口在 ≠ 能连到远程。这里识别「端口开着但代理坏/上游挂」。
-    **探测绝不持有 `_LOCK`**——probe 跑在锁内时一次最多 5 秒，期间所有共享状态
+    区别于端口探测：端口在 ≠ 能连到远程。这里分国内 / 国外探真实站点，
+    以「能连上国外（google/youtube 等 GFW 阻断站点经代理 2xx 可达）」为可用硬标准；
+    连通性画像由 `detect_working_proxy` 打到日志。
+    **探测绝不持有 `_LOCK`**——probe 跑在锁内时一次最多数秒，期间所有共享状态
     访问全部排队；现在只用独立的 `_PROBE_LOCK` 串行化探测本身。
     """
     now = time.time()
     with _LOCK:
         hit = _HEALTH.get(proxy)
-        if hit is not None and now - hit[1] < (_PROXY_TTL_OK if hit[0] else _PROXY_TTL_FAIL):
-            return hit[0]
+        if hit is not None and now - hit[1] < (_PROXY_TTL_OK if _is_usable(hit[0]) else _PROXY_TTL_FAIL):
+            return _is_usable(hit[0])
     with _PROBE_LOCK:
         with _LOCK:                       # 双检：等锁期间可能已被别人探好
             hit = _HEALTH.get(proxy)
-            if hit is not None and now - hit[1] < (_PROXY_TTL_OK if hit[0] else _PROXY_TTL_FAIL):
-                return hit[0]
-        ok = _forward_probe(proxy, timeout)   # ← 网络 I/O：锁外进行
+            if hit is not None and now - hit[1] < (_PROXY_TTL_OK if _is_usable(hit[0]) else _PROXY_TTL_FAIL):
+                return _is_usable(hit[0])
+        conn = _forward_probe(proxy, timeout)   # ← 网络 I/O：锁外进行
         with _LOCK:
-            _HEALTH[proxy] = (ok, time.time())
-    return ok
+            _HEALTH[proxy] = (conn, time.time())
+    return _is_usable(conn)
 
 
 # ---------------------------------------------------------------- 本机端口顶替
@@ -110,23 +166,41 @@ def detect_working_proxy(host: str = "127.0.0.1") -> str | None:
     """在 7889-7899 里找一个**转发真正可用**的本机代理端口（编号最小者）。
 
     两步：① TCP 并行探开（`scan_open_ports`，约 0.25s）；② 对开着的端口**并行**做
-    真实转发验证（走 HTTPS CONNECT 的小请求）。只做 ① 的话，端口开着但上游挂了的
-    坏端口会被当成可用填回去——正是「代理不好使还一直用旧端口」的来源。
-    验证结论顺手写进 `_HEALTH` 缓存，后续 `proxy_reachable` 直接命中。
+    真实转发验证——分国内（baidu/bilibili）与国外（google/instagram）两组探真实站点，
+    以「能连上国外」为可用硬标准。只做 ① 的话，端口开着但上游挂了的坏端口会被当成
+    可用填回去——正是「代理不好使还一直用旧端口」的来源。
+    每轮把各端口连通性矩阵打到日志（仅连通性画像变化时），方便排查。
     """
+    global _LAST_CONN_FP
     ports = scan_open_ports(host)
     if not ports:
         return None
     urls = [f"http://{host}:{p}" for p in ports]
     # 直接并行 _forward_probe（探测不在锁内，池化不会互相卡），结果回填缓存
     with ThreadPoolExecutor(max_workers=len(urls)) as pool:
-        oks = list(pool.map(lambda u: _forward_probe(u, _DETECT_TIMEOUT), urls))
+        conns = list(pool.map(lambda u: _forward_probe(u, _DETECT_TIMEOUT), urls))
     now = time.time()
     with _LOCK:
-        for u, ok in zip(urls, oks):
-            _HEALTH[u] = (ok, now)
-    for p, ok in zip(ports, oks):
-        if ok:
+        for u, conn in zip(urls, conns):
+            _HEALTH[u] = (conn, now)
+    # 连通性矩阵日志（画像不变则不刷屏）
+    fp = tuple(
+        (p, tuple(conns[i]["domestic"].values()), tuple(conns[i]["foreign"].values()))
+        for i, p in enumerate(ports)
+    )
+    if fp != _LAST_CONN_FP:
+        _LAST_CONN_FP = fp
+        bits = []
+        for i, p in enumerate(ports):
+            d, f = conns[i]["domestic"], conns[i]["foreign"]
+            dom = "".join("✓" if d[k] else "✗" for k in d)
+            frn = "".join("✓" if f[k] else "✗" for k in f)
+            bits.append(f"{p}[国内{dom} 国外{frn}]")
+        chosen = next((p for p, c in zip(ports, conns) if _is_usable(c)), None)
+        verdict = f"http://{host}:{chosen}" if chosen else "无可用代理（国外均不通）"
+        logger.info(f"代理连通性探测：{' · '.join(bits)} → 选用 {verdict}")
+    for p, conn in zip(ports, conns):
+        if _is_usable(conn):
             if p != ports[0]:
                 logger.debug(f"端口 {ports[0]} 等转发不通，跳过，选用 {host}:{p}")
             return f"http://{host}:{p}"
