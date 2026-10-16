@@ -25,11 +25,11 @@
 日志：统一走 almond.core.log（loguru），格式「时间 | 级别 | 文件:行号 | 消息」，
   终端按级别着色；测试报告的 PASS/FAIL/SKIP 也走同一出口（SUCCESS/INFO/ERROR 级）。
 
-经验缓存（cache/fetch_hints.json）：
+经验缓存（metadata.db 的 `fetch_hints` 表，原 cache/fetch_hints.json 已迁库）：
 - 已知直连不通的域名不跑直连；代理转发不通时快速失败而不是烧满超时。
 - **智能模式（默认）**：该域名已有可行策略时，分层用例全部跳过，只经 fetch_page
   做一次「策略直用」（学成一次，之后每次都是单请求）；想重新验证 scrapling 各层用 --full。
-- 重置学习：删除 cache/fetch_hints.json。
+- 重置学习：清空 metadata.db 的 `fetch_hints` 表数据（或删除整个存储目录重建）。
 
 退出码：有失败用例 = 1，全部通过 = 0。
 """

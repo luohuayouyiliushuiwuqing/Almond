@@ -48,6 +48,8 @@ Almond/
 │       │                  # 静态解析 / 图片代抓 / 目录浏览（都不碰 socket）
 │       └── dist/          # Vite 构建产物（被后端直接 serve，已纳入版本控制）
 ├── tests/                 # 独立测试脚本（无 pytest：unittest 用例 + 抓取演练脚本）
+├── extract_domains.py     # 仓库根小工具（纯标准库）：从 metadata.db 每个域名导一条网址，只读打开库
+├── strip_to_links.py      # 仓库根小工具（纯标准库）：把导出的书签文件剥回「只有链接」→ 逐行 URL
 ├── scripts/               # stop_service.{sh,ps1,bat}：停服务进程并释放端口
 ├── extension/             # 浏览器插件（Chrome/Edge MV3）：当前页 / 标签页一键收藏进看板，加载即用
 ├── docs/                  # git 子模块（→ AlmondMD）：CHANGE.md 变更记录 · TODO.md 待办 · ROADMAP.md 功能方向 · CLAUDE.md 使用指引 · ARCHITECTURE.md 架构

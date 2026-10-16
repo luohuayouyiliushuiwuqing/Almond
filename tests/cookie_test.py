@@ -30,7 +30,7 @@
        明显属于其它站的会被丢弃并计数；内联字符串或 .json 文件路径都行，文件按 UTF-8 读）
 
 说明：
-- Cookie 存在存储目录的 cache/fetch_hints.json（按根域名），脚本会打印文件位置。
+- Cookie 与经验现已存入存储目录的 metadata.db（`fetch_hints` 表，按根域名），脚本会打印该库路径（`fetch_hints.path()`）。
 - 页面不通过 Set-Cookie 下发 Cookie（只在 JS 里写）时 ① 会失败——那种 Cookie 请用
   `tests/scrapling_test.py <url> --cookie "a=1; b=2"` 从浏览器原样粘贴（分号串人工通道），
   或者用本脚本的 --cookie-json 传 JSON。
