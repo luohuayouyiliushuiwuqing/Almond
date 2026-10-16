@@ -12,6 +12,13 @@ function verdict(t) {
   if (t.confirm && t.confirm.ok === false) {
     return { text: '无方案', cls: 'bad', title: `系统实测：${t.confirm.reason || '直连/代理/JS 多路尝试均未取得数据'}（${t.confirm.at || '时间未知'}）——自动抓取整组跳过` }
   }
+  // 域名定义兜底方案（实测不通，但按 need_proxy 规则 / 国内外能定出路由）：放行整组、标注推断
+  if (t.scheme === 'direct' && !t.strategy) {
+    return { text: '直连·推断', cls: 'ok', title: '域名定义方案：按直连抓取（国内 / 强制直连，未经实测）——自动抓取放行' }
+  }
+  if (t.scheme === 'proxy' && !t.strategy) {
+    return { text: '代理·推断', cls: 'proxy', title: '域名定义方案：按代理抓取（国外 / 强制代理，未经实测）——自动抓取放行' }
+  }
   if (t.confirm && t.plan !== true) {
     return { text: '方案失效', cls: 'bad', title: `系统实测：确认过（${t.confirm.at || '时间未知'}）但当前无可用方案——自动抓取跳过，人工强制补抓仍可试` }
   }

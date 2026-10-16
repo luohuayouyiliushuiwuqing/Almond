@@ -491,6 +491,49 @@ main {
 .proxy-row .rule-select { flex: 0 0 92px; }
 /* 按钮按内容宽度，不参与伸缩 */
 .proxy-row .btn-ghost { flex: 0 0 auto; white-space: nowrap; }
+
+/* 导入导出面板：紧凑分组，避免大块堆叠 */
+.io-block { margin-bottom: 14px; }
+.io-block-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.io-count { font-weight: 500; font-size: 12px; color: var(--faint); }
+.io-export-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.io-seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+.io-seg-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 7px 12px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.io-seg-btn + .io-seg-btn { border-left: 1px solid var(--border); }
+.io-seg-btn.on { background: var(--accent); color: #fff; }
+.io-seg-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.io-format { flex: 1 1 150px; min-width: 130px; }
+.io-import-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.io-hint { font-size: 12px; color: var(--faint); }
 .domain-form select { width: 100%; }
 .proxy-hint {
   font-size: 11.5px;

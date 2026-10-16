@@ -779,6 +779,7 @@ export async function refreshTests() {
     const parts = []
     if ((result.confirmed || []).length) parts.push(`新确认 ${result.confirmed.length} 个`)
     if ((result.ready || []).length) parts.push(`已有方案 ${result.ready.length} 个`)
+    if ((result.defined || []).length) parts.push(`域名定义 ${result.defined.length} 个`)
     if ((result.failed || []).length) parts.push(`无方案 ${result.failed.length} 个`)
     if ((result.transient || []).length) parts.push(`临时失败 ${result.transient.length} 个`)
     const skipped = result.skipped || []
@@ -809,6 +810,7 @@ export async function retryDomain(name) {
     const parts = []
     if ((result.confirmed || []).length) parts.push(`新确认 ${result.confirmed.length} 个`)
     if ((result.ready || []).length) parts.push(`已有方案 ${result.ready.length} 个`)
+    if ((result.defined || []).length) parts.push(`域名定义 ${result.defined.length} 个`)
     if ((result.failed || []).length) parts.push(`无方案 ${result.failed.length} 个`)
     if ((result.transient || []).length) parts.push(`临时失败 ${result.transient.length} 个`)
     const skipped = result.skipped || []

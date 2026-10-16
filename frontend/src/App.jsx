@@ -11,6 +11,7 @@ import DomainPage from './DomainPage.jsx'
 import SelectBar from './SelectBar.jsx'
 import ProxyPanel from './ProxyPanel.jsx'
 import StoragePanel from './StoragePanel.jsx'
+import ImportExportPanel from './ImportExportPanel.jsx'
 import DetailModal from './DetailModal.jsx'
 import RenameModal from './RenameModal.jsx'
 import TagModal from './TagModal.jsx'
@@ -48,6 +49,7 @@ export default function App() {
   let modalEl = null
   if (modal.type === 'proxy') modalEl = <ProxyPanel />
   else if (modal.type === 'storage') modalEl = <StoragePanel />
+  else if (modal.type === 'import_export') modalEl = <ImportExportPanel />
   else if (modal.type === 'detail') modalEl = modal.payload ? <DetailModal record={modal.payload} /> : null
   else if (modal.type === 'rename') modalEl = modal.payload ? <RenameModal record={modal.payload} /> : null
   else if (modal.type === 'tag') modalEl = modal.payload ? <TagModal payload={modal.payload} /> : null

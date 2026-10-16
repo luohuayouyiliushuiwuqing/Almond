@@ -354,8 +354,13 @@ def effective_proxy(url: str, global_proxy: str) -> str | None:
 def resolve_proxy(url: str, global_proxy: str) -> str | None:
     """**全项目唯一代理判定入口**：优先级判定 + 国内站点旁路直连。
 
+    未显式配置全局代理时，回落到后台自动探测到的本机代理（`current_proxy()`），
+    让「代理连通性探测 → 选用 …」的结论真正被抓取使用，而不是只停留在日志里
+    （否则就会出现「前面探测到代理、后面抓取却说没有代理」的脱节）。
     国内站点就算规则说用代理也直连（fetch_page 对直调方另有同款旁路兜底）。
     """
+    if not global_proxy:
+        global_proxy = current_proxy() or ""
     proxy = effective_proxy(url, global_proxy)
     if proxy and is_domestic(url):
         return None

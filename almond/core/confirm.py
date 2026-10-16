@@ -23,7 +23,11 @@
 from concurrent.futures import ThreadPoolExecutor
 
 from almond.core import fetch_hints, fetchpool, records, storage
-from almond.core.domains import get_domain_fetch_config, list_domains
+from almond.core.domains import (
+    get_domain_fetch_config,
+    get_domain_need_proxy,
+    list_domains,
+)
 from almond.core.hostutil import is_domestic, root_domain
 from almond.core.log import logger
 
@@ -33,6 +37,21 @@ _TEST_REASON = "直连/代理/JS 多路尝试均未取得数据"
 
 def _root(url: str) -> str:
     return root_domain(url) or url
+
+
+def _domain_defined_scheme(url: str) -> str:
+    """实测不通时，按「域名定义」推导兜底方案：先取域名 `need_proxy` 规则，
+    无规则时按国内外兜底（国内→直连，国外→代理）。返回 'direct' / 'proxy'。
+
+    此函数**永远给出方案**（国内外总能兜底）——它就是「无方案 → 改判为
+    域名定义方案放行」的兜底依据，而非「可能返回 None」的开放判定。
+    """
+    need = get_domain_need_proxy(url)
+    if need is True:
+        return "proxy"
+    if need is False:
+        return "direct"
+    return "direct" if is_domestic(url) else "proxy"
 
 
 def _candidates(domains: list | None = None) -> tuple[dict, set]:
@@ -130,6 +149,15 @@ def _test_one(domain: str, url: str, proxy_for, start_epoch: int,
         fetch_hints.confirm_domain(url, True)
         logger.info(f"方案确认：{domain} 可用（{url}）")
         return ("confirmed", None)
+    # 实测不通：若域名自身能定义出兜底方案（need_proxy 规则 / 国内外），
+    # 则放行整组、按该方案抓取，而非判「无方案」整组跳过。
+    scheme = _domain_defined_scheme(url)
+    if scheme:
+        fetch_hints.set_domain_scheme(url, scheme)
+        logger.info(
+            f"方案确认：{domain} 无实测方案，按域名定义方案放行（{scheme}，{url}）"
+        )
+        return ("defined", scheme)
     fetch_hints.confirm_domain(url, False, _TEST_REASON)
     logger.info(f"方案确认：{domain} 无可用方案，自动抓取整组跳过（{url}）")
     return ("failed", _TEST_REASON)
@@ -157,6 +185,7 @@ def confirm_domains(domains: list | None = None, proxy_for=None,
     ready: list = []
     confirmed: list = []
     failed: list = []
+    defined: list = []
     skipped: list = []
     transient: list = []
     aborted = False
@@ -180,6 +209,8 @@ def confirm_domains(domains: list | None = None, proxy_for=None,
         for (d, _url), (status, info) in zip(tests, results):
             if status == "confirmed":
                 confirmed.append(d)
+            elif status == "defined":
+                defined.append(d)
             elif status == "failed":
                 failed.append({"domain": d, "reason": info})
             elif status == "aborted":
@@ -187,10 +218,11 @@ def confirm_domains(domains: list | None = None, proxy_for=None,
             else:   # transient：不下持久结论，本轮不算数
                 transient.append({"domain": d, "reason": info})
 
-    if ready or confirmed or failed:
+    if ready or confirmed or failed or defined:
         logger.info(
             f"方案确认：就绪 {len(ready)} · 新确认可用 {len(confirmed)} · "
-            f"无方案 {len(failed)} · 跳过 {len(skipped)} · 临时失败 {len(transient)}"
+            f"域名定义 {len(defined)} · 无方案 {len(failed)} · 跳过 {len(skipped)} · 临时失败 {len(transient)}"
         )
     return {"ready": ready, "confirmed": confirmed, "failed": failed,
-            "skipped": skipped, "transient": transient, "aborted": aborted}
+            "defined": defined, "skipped": skipped, "transient": transient,
+            "aborted": aborted}

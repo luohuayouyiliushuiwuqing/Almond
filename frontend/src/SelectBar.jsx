@@ -7,18 +7,6 @@ export default function SelectBar() {
   if (n === 0) return null
   const noVisible = getVisibleRecords().length === 0
 
-  const exportSelected = (format) => {
-    const known = new Set(s.records.map((r) => r.url))
-    const recs = [...s.selectedUrls].filter((u) => known.has(u)).map((u) => s.records.find((r) => r.url === u))
-    const lines = recs.map((r) => r.url).join('\n') + '\n'
-    const blob = new Blob([lines], { type: 'text/plain;charset=utf-8' })
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = 'bookmarks.txt'
-    a.click()
-    URL.revokeObjectURL(a.href)
-  }
-
   const refetchSelected = () => {
     const known = new Set(s.records.map((r) => r.url))
     const urls = [...s.selectedUrls].filter((u) => known.has(u))
@@ -38,10 +26,7 @@ export default function SelectBar() {
       <button className="btn-ghost" onClick={refetchSelected}>重新抓取</button>
       <button className="btn-danger" onClick={removeSelected}>删除</button>
       <span className="sel-sep" />
-      <select className="input export-select" defaultValue="" onChange={(e) => { const f = e.target.value; e.target.value = ''; if (f) exportSelected(f) }}>
-        <option value="">导出</option>
-        <option value="txt">TXT</option>
-      </select>
+      <button className="btn-ghost" onClick={() => openModal('import_export')}>导入导出</button>
     </div>
   )
 }

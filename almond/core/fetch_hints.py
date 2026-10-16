@@ -300,7 +300,9 @@ def all_hints() -> dict:
                 "proxy": row.get("proxy"),
                 "updated": row.get("updated", ""),
                 "strategy": sid,
-                "plan": bool(sid) or bool((row.get("cookie") or {}).get("value")),
+                "scheme": row.get("domain_scheme"),
+                "plan": bool(sid) or bool((row.get("cookie") or {}).get("value"))
+                or bool(row.get("domain_scheme")),
                 "confirm": row.get("confirm"),
             }
         return out
@@ -357,7 +359,8 @@ def skip_reason(url: str, proxy: str | None) -> str | None:
 # ---------------------------------------------------------------- 方案确认（confirm 阶段）
 
 def domain_plan(url: str) -> bool:
-    """该域名当前**有没有可用抓取方案**：活跃策略 或 已存 Cookie（Cookie 直取也算方案）。
+    """该域名当前**有没有可用抓取方案**：活跃策略 或 已存 Cookie（Cookie 直取也算方案）
+    **或** 域名定义兜底方案（`domain_scheme`，实测不通时按 need_proxy 规则 / 国内外兜底）。
 
     入参既可以是完整 URL 也可以是裸域名（`host_of()` 对裸名原样返回）。
     这是自动抓取的放行判据——`plan=True` 才允许自动抓这一组（先确认、后抓取）。
@@ -366,7 +369,7 @@ def domain_plan(url: str) -> bool:
         row = load()["hosts"].get(host_of(url), {})
         return bool((row.get("strategy") or {}).get("id")) or bool(
             (row.get("cookie") or {}).get("value")
-        )
+        ) or bool(row.get("domain_scheme"))
 
 
 def confirm_domain(url: str, ok: bool, reason: str = "") -> None:
@@ -393,6 +396,32 @@ def get_confirm(url: str) -> dict | None:
     with LOCK:
         c = load()["hosts"].get(host_of(url), {}).get("confirm")
         return dict(c) if isinstance(c, dict) else None
+
+
+def set_domain_scheme(url: str, scheme: str) -> None:
+    """写入「域名定义兜底方案」（confirm 阶段实测不通时调用）：scheme ∈ {'direct','proxy'}。
+
+    让该域名拿到 `plan`（自动抓取放行），但标注为**推断方案、未经实测**——
+    前端徽标显示「直连·推断 / 代理·推断」。判定规则见 `confirm._domain_defined_scheme`：
+    先取域名 `need_proxy` 规则，无规则时按国内外兜底（国内→直连，国外→代理）。
+    """
+    if not write_allowed():
+        return
+    if scheme not in ("direct", "proxy"):
+        return
+    domain = host_of(url)
+    now = datetime.now().strftime(TS_FMT)
+    with LOCK:
+        row = load()["hosts"].setdefault(domain, {})
+        row["domain_scheme"] = scheme
+        row["updated"] = now
+        save(domain)
+
+
+def get_domain_scheme(url: str) -> str | None:
+    """该域名的域名定义兜底方案 'direct'/'proxy'/None（与 `domain_scheme` 字段对应）。"""
+    with LOCK:
+        return load()["hosts"].get(host_of(url), {}).get("domain_scheme")
 
 
 def _on_storage_changed() -> None:
