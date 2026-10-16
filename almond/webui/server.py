@@ -24,6 +24,7 @@ from almond.core.proxy import REFRESH_INTERVAL, start_proxy_refresh
 from almond.webui import api_fetch, api_records, api_domains, api_proxy, api_storage, auth
 from almond.webui import staticfiles
 from almond.webui.api_util import read_json, send_json
+from almond.webui.launch import DEFAULT_PORT, PORT_SCAN
 
 # 路由表：(method, path) → handler(h, qs, body)；未命中的 GET 走静态文件，其余 404
 _ROUTES: dict = {}
@@ -114,9 +115,6 @@ def _is_loopback(host: str) -> bool:
     return host in ("127.0.0.1", "localhost", "::1") or host.startswith("127.")
 
 
-PORT_SCAN = 20   # 从 --port 起最多往后试几个端口
-
-
 def _bind(host: str, port: int):
     """绑定服务，端口被占就往后跳，返回 (server, 实际端口)。
 
@@ -140,7 +138,7 @@ def main() -> None:
     # 不会把 Web 服务再启动一遍（console 入口没有 __main__ 保护时尤其需要）
     multiprocessing.freeze_support()
     host = _opt("--host", "127.0.0.1")
-    port = int(_opt("--port", "4000"))
+    port = int(_opt("--port", str(DEFAULT_PORT)))
     # CLI 上的 token 会进 ps 与 shell history，能用环境变量就用环境变量
     token = _opt("--token", "") or os.environ.get("ALMOND_TOKEN", "")
     if not _is_loopback(host) and not token.strip():

@@ -30,7 +30,6 @@ from almond.core import db, hostutil, storage
 from almond.core.log import logger
 from almond.core.proxy import proxy_reachable
 
-HINTS_FILENAME = "fetch_hints.json"
 TS_FMT = "%Y-%m-%d %H:%M:%S"     # 全部经验时间戳格式（策略/Cookie 模块共用）
 
 # 直连「网络不可达」类错误的关键词（大小写不敏感）。
